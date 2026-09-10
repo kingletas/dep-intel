@@ -106,7 +106,12 @@ cat > "$tmp/multi/composer.lock" <<'JSON'
 {"packages":[{"name":"magento/product-enterprise-edition","version":"2.4.8-p2"}],"packages-dev":[]}
 JSON
 
-check_out  "a Cargo.lock crate is inventoried"    "crates.io"            "$bin" inventory "$tmp/multi"
+# Reading Cargo.lock needs tomllib (3.11+) or tomli; without either it must say so.
+if python3 -c 'import tomllib' 2>/dev/null || python3 -c 'import tomli' 2>/dev/null; then
+  check_out  "a Cargo.lock crate is inventoried"    "crates.io"            "$bin" inventory "$tmp/multi"
+else
+  check_out  "a Cargo.lock is named as unread without a TOML parser" "no TOML parser" "$bin" inventory "$tmp/multi"
+fi
 check_out  "a Terraform provider becomes a Go module"            "github.com/hashicorp/terraform-provider-aws"            "$bin" inventory "$tmp/multi" --format json
 check_out  "a private Terraform registry is named as unchecked" "NOT checked"            "$bin" inventory "$tmp/multi"
 check_out  "an exact action tag is locked"        "actions/setup-node"            "$bin" inventory "$tmp/multi" --format json
