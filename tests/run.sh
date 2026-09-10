@@ -136,7 +136,7 @@ check_out  "sync -n prints a plan without fetching" "will download" "$bin" sync 
 
 # With no roots configured, sweep walks the directory it was started in.
 git init -q "$tmp/repo"
-sweep_out="$(cd "$tmp" && env -u DEP_INTEL_ROOTS "$bin" sweep --no-fail 2>&1 || true)"
+sweep_out="$( { cd "$tmp" && env -u DEP_INTEL_ROOTS "$bin" sweep --no-fail; } 2>&1 )" || true
 check_out  "sweep defaults to the current directory" "1 repositories under $(cd "$tmp" && pwd -P)" \
            printf '%s\n' "$sweep_out"
 
