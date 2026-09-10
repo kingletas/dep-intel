@@ -130,9 +130,8 @@ def _is_repo_root(path: Path) -> bool:
     Named behaviour on failure rather than a bare except: a path we are not
     allowed to stat cannot be CLAIMED to be a repository root, so it is
     treated as an ordinary directory and the walk's own permission guard
-    deals with whatever is inside it. Real case: a rootless container's
-    bind-mounted .git under docker/proxy-dns, which raises PermissionError
-    from exists() itself.
+    deals with whatever is inside it. A rootless container's bind-mounted
+    .git, for example, raises PermissionError from exists() itself.
     """
     try:
         return (path / ".git").exists()
