@@ -685,6 +685,11 @@ def test_uv_lock_skips_the_project_being_scanned():
             'source = { registry = "https://pypi.org/simple" }\n'
         )
         res = manifests.parse(root / "uv.lock", root)
+        if manifests.TOML_BACKEND is None:
+            # uv.lock is TOML: without tomllib or tomli it must be skipped with a reason.
+            check("with no TOML parser, uv.lock yields nothing", res.packages, [])
+            check("and says why", "no TOML parser" in " ".join(w for _p, w in res.skipped), True)
+            return
         check("the editable project is not reported as a gap", res.skipped, [])
         check("its dependency is still collected",
               [(p.ecosystem, p.name, p.version) for p in res.packages],
