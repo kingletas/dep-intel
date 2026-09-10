@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#
+# dep-intel -- dependency vulnerability intelligence, offline.
+#
+# Thin wrapper. The tool is several modules, so it lives in dep-intel.d/ and
+# this file puts one extensionless command on PATH.
+#
+# The directory is resolved from BASH_SOURCE with `pwd -P`, NOT from $HOME, so
+# the pair works from any install prefix -- /usr/local/bin, ~/.local/bin, a
+# checkout. Never replace this file with a symlink: `pwd -P` would resolve to
+# the link's target directory and the command would look for dep-intel.d
+# beside the original rather than beside the link.
+
+set -euo pipefail
+
+HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+exec "$HERE/dep-intel.d/cli.py" "$@"

@@ -1,0 +1,22 @@
+# A repo-local ignore file is load-bearing. Git's core.excludesFile is a global
+# list, and on some machines it excludes *.sh and *.py -- so a new repository
+# silently loses its own source. These negations re-include them.
+!*.sh
+!*.py
+
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+
+# The advisory store. It is generated, it is ~34 MB, and it is per-machine.
+*.db
+*.db-wal
+*.db-shm
+
+# Disposable output: build products, screenshots, working images, scratch
+# notes. Nothing here is reviewed and nothing here is committed.
+#
+# It carries its own line because the machine this was written on hides it
+# through a user-level excludes file, and a clone has none of that.
+local.d/

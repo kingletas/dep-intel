@@ -1,0 +1,17 @@
+# This lives INSIDE the payload directory rather than at the repository root,
+# because the payload is what gets installed. ruff resolves config by walking
+# up from each file, so a root-level config reaches these modules in a
+# checkout and reaches nothing once they are copied onto a PATH -- where the
+# linter would then quietly apply a newer target version and start suggesting
+# constructs that break the floor.
+#
+# 3.9 is the floor, and it is a deliberate one: this is a security tool, and a
+# security tool that needs a recent interpreter is a security tool that gets
+# skipped on the machine where it matters. Telling ruff about it stops it
+# suggesting 3.10+ constructs like itertools.pairwise, which would break the
+# floor silently on a machine nobody tests on.
+target-version = "py39"
+line-length = 88
+
+[lint]
+extend-select = ["I", "UP", "B", "C4", "SIM", "RUF"]

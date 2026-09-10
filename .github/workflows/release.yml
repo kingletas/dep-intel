@@ -1,0 +1,77 @@
+name: Release
+
+# Tagging is the whole trigger: `git tag v1.2.3 && git push --tags` checks the
+# changelog has a section for it, then publishes a GitHub Release whose body is
+# that section.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, without the leading v (e.g. 1.2.3)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Work out which version this is
+        id: pick
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="$INPUT_VERSION"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          # A release with no notes is one nobody can read, so this stops here
+          # rather than publishing an empty body.
+          packaging/release-notes.sh "$version" > /dev/null
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: The tag matches the version the tool reports
+        env:
+          VERSION: ${{ steps.pick.outputs.version }}
+        run: |
+          reported="$(bin/dep-intel --version)"
+          if [ "$reported" != "dep-intel ${VERSION}" ]; then
+            echo "the tag says ${VERSION} but the tool says: ${reported}" >&2
+            exit 1
+          fi
+
+      - name: Install the linters make check runs
+        run: |
+          command -v shellcheck >/dev/null || { sudo apt-get update && sudo apt-get install -y shellcheck; }
+          pipx install ruff
+
+      - name: make check
+        run: make check
+
+      - name: Install from the tagged commit
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          make install PREFIX="$HOME/.local/bin"
+          "$HOME/.local/bin/dep-intel" test
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${{ steps.pick.outputs.version }}"
+          packaging/release-notes.sh "$version" > notes.md
+          if gh release view "v${version}" >/dev/null 2>&1; then
+            echo "v${version} exists: updating its notes"
+            gh release edit "v${version}" --title "dep-intel ${version}" --notes-file notes.md
+          else
+            gh release create "v${version}" --target "$GITHUB_SHA" \
+              --title "dep-intel ${version}" --notes-file notes.md
+          fi

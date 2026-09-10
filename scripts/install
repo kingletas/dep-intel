@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# install -- put dep-intel on your PATH.
+#
+# Usage:
+#   scripts/install [PREFIX]     default: ~/bin
+#
+# Copies rather than symlinks, on purpose. The wrapper resolves its own
+# directory with `pwd -P` so it can find dep-intel.d beside itself; a symlink
+# would resolve to THIS checkout, and the command would break the moment the
+# checkout moved. A copy is inert.
+
+set -euo pipefail
+
+usage() { sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+[[ "${1:-}" =~ ^(-h|--help)$ ]] && { usage; exit 0; }
+
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+prefix="${1:-$HOME/bin}"
+
+[[ -d "$prefix" ]] || { echo "install: no such directory: $prefix" >&2; exit 2; }
+
+install -m 755 "$here/bin/dep-intel" "$prefix/dep-intel"
+install -d -m 755 "$prefix/dep-intel.d"
+install -m 644 "$here"/bin/dep-intel.d/*.py "$prefix/dep-intel.d/"
+# The ruff config travels with the payload on purpose -- see the comment in
+# the file itself. Without it a linter run against the installed copy applies
+# a different target version than CI did.
+install -m 644 "$here/bin/dep-intel.d/ruff.toml" "$prefix/dep-intel.d/ruff.toml"
+chmod 755 "$prefix/dep-intel.d/cli.py" "$prefix/dep-intel.d/test.py"
+
+echo "installed dep-intel -> $prefix"
+
+case ":$PATH:" in
+  *":$prefix:"*) ;;
+  *) echo "note: $prefix is not on your PATH" >&2 ;;
+esac
+
+# Prove the install rather than announcing it. A wrapper that resolves its own
+# directory has exactly one interesting failure mode -- it cannot find its
+# payload -- and that failure is silent until someone runs a real command.
+"$prefix/dep-intel" --version
