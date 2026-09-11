@@ -111,12 +111,16 @@ MAGENTO_METAPACKAGES = {
 # Mage-OS editions derive from Magento Open Source but carry their own version line.
 MAGE_OS_EDITION_PREFIX = "mage-os/product-"
 MAGE_OS_MATCHED_AS = "magento/product-community-edition"
-_MAGENTO_VERSION = re.compile(r"^\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z.]+)?$")
+_EXACT_VERSION = re.compile(r"^\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z.]+)?$")
+
+# A `replace` of one of these names is followed, so a fork is checked as the package it stands in for.
+REPLACED_PREFIX = "magento/"
+_COMPOSER_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$")
 
 
 @dataclass(frozen=True)
 class MatchedAs:
-    """The package and version advisories are looked up by, in place of the locked ones."""
+    """Another package and version whose advisories also apply to the locked one."""
     name: str
     version: str
     source: str         # where the mapping was read from
@@ -132,7 +136,7 @@ class Package:
     version: str
     scope: str          # runtime | dev
     manifest: str       # repo-relative path
-    matched_as: MatchedAs | None = None
+    matched_as: tuple = ()  # MatchedAs entries looked up besides the package's own name
     unmatchable: str = ""   # why no advisory can be matched; reported as unresolved
 
 
@@ -217,7 +221,8 @@ def parse_composer_lock(path: Path, root: Path) -> ParseResult:
                 skipped.append((rel, f"entry without name/version: {name!r}"))
                 continue
             clean = str(ver).lstrip("vV")
-            out.append(Package("Packagist", name, clean, scope, rel))
+            out.append(Package("Packagist", name, clean, scope, rel,
+                               matched_as=_replaced(p)))
             # Adobe Commerce and Magento Open Source ship from
             # repo.magento.com rather than Packagist, so OSV holds no
             # advisory for these two names and a store scanned clean on the
@@ -230,14 +235,29 @@ def parse_composer_lock(path: Path, root: Path) -> ParseResult:
     return ParseResult(out, skipped)
 
 
+def _replaced(entry: dict) -> tuple:
+    """The `magento/*` packages this entry replaces at an exact version; `*` means removed and is skipped."""
+    replace = entry.get("replace")
+    if not isinstance(replace, dict):
+        return ()
+    out = []
+    for name, version in replace.items():
+        if not (isinstance(name, str) and name.startswith(REPLACED_PREFIX)
+                and _COMPOSER_NAME.match(name)):
+            continue
+        if isinstance(version, str) and _EXACT_VERSION.match(version.lstrip("vV")):
+            out.append(MatchedAs(name, version.lstrip("vV"), "replace"))
+    return tuple(out)
+
+
 def _mage_os_edition(entry: dict, name: str, version: str, scope: str,
                      rel: str) -> Package:
     """A Mage-OS edition, matched as the Magento release its `extra.magento_version` names."""
     extra = entry.get("extra")
     declared = extra.get("magento_version") if isinstance(extra, dict) else None
-    if isinstance(declared, str) and _MAGENTO_VERSION.match(declared):
+    if isinstance(declared, str) and _EXACT_VERSION.match(declared):
         mapping = MatchedAs(MAGE_OS_MATCHED_AS, declared, "extra.magento_version")
-        return Package("Magento", name, version, scope, rel, matched_as=mapping)
+        return Package("Magento", name, version, scope, rel, matched_as=(mapping,))
     if declared is None:
         why = "no extra.magento_version"
     else:

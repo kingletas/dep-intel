@@ -181,42 +181,51 @@ def scan_packages(conn, repo: str, packages, include_dev: bool = True):
         # using the manifest name would find nothing and, worse, would leave
         # the version scheme undefined so every match came back unresolved.
         eco = E.advisory_ecosystem(pkg.ecosystem)
-        mapped = getattr(pkg, "matched_as", None)
-        name, version = (mapped.name, mapped.version) if mapped else (pkg.name, pkg.version)
-        norm = V.normalize_name(eco, name)
-        for row in _advisories_for(conn, eco, norm):
-            affected, conf, evidence, fixed, reason = decide(
-                conn, row["aid"], eco, version
-            )
-            if affected is None:
-                reason = reason or "undecided"
-                if mapped:
-                    reason = f"{reason}; matched as {mapped.describe()}"
-                unresolved.append(Unresolved(
-                    repo, pkg.manifest, pkg.ecosystem, pkg.name, pkg.version,
-                    row["id"], reason))
-                continue
-            if not affected:
-                continue
-            aliases = [a[0] for a in conn.execute(
-                "SELECT alias FROM alias WHERE vuln_id = ?", (row["id"],))]
-            findings.append(Finding(
-                repo=repo, manifest=pkg.manifest, ecosystem=pkg.ecosystem,
-                package=pkg.name, version=pkg.version, scope=pkg.scope,
-                vuln_id=row["id"], aliases=aliases,
-                summary=row["summary"] or "",
-                severity=row["severity"] or "unknown",
-                severity_source=row["severity_source"] or "none",
-                cvss_score=row["cvss_score"], cvss_vector=row["cvss_vector"] or "",
-                cwe=row["cwe"] or "", kev=bool(row["kev"]),
-                kev_added=row["kev_added"] or "",
-                kev_ransomware=row["kev_ransomware"] or "",
-                fixed=fixed, confidence=conf, evidence=evidence,
-                refs=(row["refs"] or "").split("\n") if row["refs"] else [],
-                mapped_to=mapped,
-            ))
+        seen = set()
+        for name, version, mapped in _lookups(pkg):
+            for row in _advisories_for(conn, eco, V.normalize_name(eco, name)):
+                if row["id"] in seen:
+                    continue
+                seen.add(row["id"])
+                affected, conf, evidence, fixed, reason = decide(
+                    conn, row["aid"], eco, version
+                )
+                if affected is None:
+                    reason = reason or "undecided"
+                    if mapped:
+                        reason = f"{reason}; matched as {mapped.describe()}"
+                    unresolved.append(Unresolved(
+                        repo, pkg.manifest, pkg.ecosystem, pkg.name, pkg.version,
+                        row["id"], reason))
+                    continue
+                if not affected:
+                    continue
+                aliases = [a[0] for a in conn.execute(
+                    "SELECT alias FROM alias WHERE vuln_id = ?", (row["id"],))]
+                findings.append(Finding(
+                    repo=repo, manifest=pkg.manifest, ecosystem=pkg.ecosystem,
+                    package=pkg.name, version=pkg.version, scope=pkg.scope,
+                    vuln_id=row["id"], aliases=aliases,
+                    summary=row["summary"] or "",
+                    severity=row["severity"] or "unknown",
+                    severity_source=row["severity_source"] or "none",
+                    cvss_score=row["cvss_score"], cvss_vector=row["cvss_vector"] or "",
+                    cwe=row["cwe"] or "", kev=bool(row["kev"]),
+                    kev_added=row["kev_added"] or "",
+                    kev_ransomware=row["kev_ransomware"] or "",
+                    fixed=fixed, confidence=conf, evidence=evidence,
+                    refs=(row["refs"] or "").split("\n") if row["refs"] else [],
+                    mapped_to=mapped,
+                ))
     findings.sort(key=lambda f: f.sort_key)
     return findings, unresolved
+
+
+def _lookups(pkg):
+    """(name, version, mapping) for the package's own name, then for each package it is also matched as."""
+    yield pkg.name, pkg.version, None
+    for mapped in getattr(pkg, "matched_as", ()):
+        yield mapped.name, mapped.version, mapped
 
 
 def policy_verdict(findings, fail_on="high", min_confidence="high",

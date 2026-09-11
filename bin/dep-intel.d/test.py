@@ -809,7 +809,7 @@ def test_magento_metapackage_is_cross_listed():
               1)
 
 
-def _mage_os_lock(root: Path, edition_extra):
+def _mage_os_lock(root: Path, edition_extra, framework_replaces="103.0.1"):
     """A Mage-OS composer.lock: no magento/* package, only mage-os/* ones."""
     edition = {"name": "mage-os/product-community-edition", "version": "9.1.0"}
     if edition_extra is not None:
@@ -817,14 +817,14 @@ def _mage_os_lock(root: Path, edition_extra):
     _write(root, "composer.lock", json.dumps({"packages": [
         edition,
         {"name": "mage-os/framework", "version": "9.1.0",
-         "replace": {"magento/framework": "103.0.1"}},
+         "replace": {"magento/framework": framework_replaces}},
         {"name": "mage-os/module-catalog", "version": "9.1.0",
          "replace": {"magento/module-catalog": "104.0.1"}},
     ]}))
 
 
-def test_mage_os_edition_is_matched_as_magento():
-    """Mage-OS locks no magento/* package, so its Magento CVEs went unchecked and it scanned clean."""
+def _open_source_advisory():
+    """An invented NVD record for Open Source 2.4.0 up to 2.4.7, plus 2.4.8-p1, as OSV."""
     cve = {
         "id": "CVE-2026-0005",
         "descriptions": [{"lang": "en", "value": "An example."}],
@@ -839,11 +839,14 @@ def test_mage_os_edition_is_matched_as_magento():
              "vulnerable": True},
         ]}]}],
     }
-    adv = nvd.to_osv(cve, ecosystems.REGISTRY["Magento"].cpe_products)
+    return nvd.to_osv(cve, ecosystems.REGISTRY["Magento"].cpe_products)
 
+
+def test_mage_os_edition_is_matched_as_magento():
+    """Mage-OS locks no magento/* package, so its Magento CVEs went unchecked and it scanned clean."""
     with tempfile.TemporaryDirectory() as tmp:
         conn = store.connect(Path(tmp) / "t.db")
-        _ingest(conn, [adv], ecosystem="Magento")
+        _ingest(conn, [_open_source_advisory()], ecosystem="Magento")
 
         def scan(name, edition_extra):
             root = Path(tmp) / name
@@ -901,6 +904,63 @@ def test_mage_os_edition_is_matched_as_magento():
         out = buf.getvalue()
         check("an unmapped edition is printed", "NOT checked" in out, True)
         check("and the verdict does not say clean", "clean" in out, False)
+
+
+def _framework_advisory(vid="ADV-FRAMEWORK"):
+    return _osv(vid, "Packagist", "magento/framework",
+                [{"type": "ECOSYSTEM",
+                  "events": [{"introduced": "103.0.0"}, {"fixed": "103.0.7"}]}])
+
+
+def test_replace_of_a_magento_package_is_followed():
+    """A Mage-OS module replaces a magento/* package, and that package's advisories went unchecked."""
+    both = _osv("ADV-BOTH", "Packagist", "mage-os/framework",
+                [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}]}])
+    both["affected"].append({"package": {"name": "magento/framework",
+                                         "ecosystem": "Packagist"},
+                             "ranges": [{"type": "ECOSYSTEM",
+                                         "events": [{"introduced": "0"}]}]})
+    with tempfile.TemporaryDirectory() as tmp:
+        conn = store.connect(Path(tmp) / "t.db")
+        _ingest(conn, [_framework_advisory(), both])
+
+        def scan(name, replaces):
+            root = Path(tmp) / name
+            root.mkdir()
+            _mage_os_lock(root, {"magento_version": "2.4.9"}, replaces)
+            pkgs, _skipped, _locks = manifests.collect(root)
+            framework = next(p for p in pkgs if p.name == "mage-os/framework")
+            f, u = match.scan_packages(conn, str(root), [framework])
+            return framework, [x for x in f if x.vuln_id == "ADV-FRAMEWORK"], u
+
+        framework, f, u = scan("affected", "103.0.6-p2")
+        check("the replaced package is recorded as a mapping",
+              [(m.name, m.version, m.source) for m in framework.matched_as],
+              [("magento/framework", "103.0.6-p2", "replace")])
+        check("a replaced package on an affected version is a finding",
+              [(x.package, x.version) for x in f], [("mage-os/framework", "9.1.0")])
+        check("the finding names what it was matched as",
+              f[0].mapped_to.describe() if f else None,
+              "magento/framework 103.0.6-p2 (from replace)")
+        check("an advisory naming both packages is reported once",
+              len(match.scan_packages(conn, "/r", [framework])[0]), 2)
+
+        _framework, f, u = scan("clean", "103.0.7")
+        check("a replaced package on a fixed version is not a finding", (f, u), ([], []))
+
+        for label, replaces in (("removed", "*"), ("self", "self.version"),
+                                ("constraint", "^103.0")):
+            framework, _f, _u = scan(label, replaces)
+            check(f"a {label} replace names no version and is not followed",
+                  framework.matched_as, ())
+
+    entry = {"replace": {"symfony/polyfill-php80": "1.0.0",
+                         "magento/../escape": "1.0.0",
+                         "magento/module-a": "1.0.0", "magento/module-b": 7}}
+    check("only a magento/* name at an exact version is followed",
+          [m.name for m in manifests._replaced(entry)], ["magento/module-a"])
+    check("a replace that is not a mapping is ignored",
+          manifests._replaced({"replace": ["magento/framework"]}), ())
 
 
 def test_magento_patch_levels_order():
