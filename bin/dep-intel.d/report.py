@@ -83,6 +83,8 @@ def render_text(findings, unresolved, meta, stream=sys.stdout, verbose=False):
         if f.summary:
             w(f"      {f.summary[:150]}\n")
         w(f"      {_c('dim', 'confidence: ' + f.confidence + ' — ' + f.evidence, on)}\n")
+        if f.mapped_to:
+            w(f"      {_c('dim', 'matched as: ' + f.mapped_to.describe(), on)}\n")
         w(f"      {_c('dim', 'manifest:   ' + f.manifest, on)}\n")
         w("      fixed in:   " + (", ".join(f.fixed) if f.fixed
                                   else _c("dim", "no fixed version published", on))
@@ -96,7 +98,8 @@ def render_text(findings, unresolved, meta, stream=sys.stdout, verbose=False):
                      "decided — reported, not cleared\n", on))
         shown = unresolved if verbose else unresolved[:5]
         for u in shown:
-            w(f"      {u.package} {u.version} vs {u.vuln_id}: {u.reason}\n")
+            against = f" vs {u.vuln_id}" if u.vuln_id else ""
+            w(f"      {u.package} {u.version}{against}: {u.reason}\n")
         if not verbose and len(unresolved) > len(shown):
             w(f"      … {len(unresolved) - len(shown)} more (--verbose)\n")
         w("\n")
@@ -165,6 +168,10 @@ def render_json(findings, unresolved, meta) -> str:
             "fixed_versions": f.fixed,
             "confidence": f.confidence, "evidence": f.evidence,
             "references": f.refs[:5],
+            "matched_as": ({"package": f.mapped_to.name,
+                            "version": f.mapped_to.version,
+                            "from": f.mapped_to.source}
+                           if f.mapped_to else None),
         } for f in findings],
         "unresolved": [{
             "package": u.package, "version": u.version, "ecosystem": u.ecosystem,
@@ -209,6 +216,7 @@ def render_sarif(findings, unresolved, meta) -> str:
         "level": _SARIF_LEVEL.get(f.severity, "warning"),
         "message": {"text":
             f"{f.package} {f.version} is affected by {f.vuln_id}"
+            + (f", matched as {f.mapped_to.describe()}" if f.mapped_to else "")
             + (" (CISA known-exploited)" if f.kev else "")
             + (f"; fixed in {', '.join(f.fixed)}" if f.fixed
                else "; no fixed version published")
@@ -349,9 +357,12 @@ def render_markdown(findings, unresolved, meta) -> str:
         for f in findings:
             score = f"{f.cvss_score}" if f.cvss_score is not None else "—"
             kev = "🔥 " if f.kev else ""
+            version = f"`{f.version}`"
+            if f.mapped_to:
+                version += f" as `{f.mapped_to.name}` `{f.mapped_to.version}`"
             out.append(
                 f"| {SEV_EMOJI[f.severity]} | {kev}`{f.package}` | "
-                f"`{f.version}` | {f.vuln_id} | {score} | {f.confidence} | "
+                f"{version} | {f.vuln_id} | {score} | {f.confidence} | "
                 f"{', '.join(f'`{v}`' for v in f.fixed) or '—'} | {f.scope} |")
         out.append("")
 
@@ -359,13 +370,14 @@ def render_markdown(findings, unresolved, meta) -> str:
         out += ["## Undecided matches", "",
                 "> [!warning] These are not clean results",
                 ("> An advisory named one of these packages and the version "
-                 "comparison could not be completed. They are listed because "
+                 "comparison could not be completed, or the package could not "
+                 "be matched against its advisories at all. They are listed because "
                  "the alternative — letting them fall through as *not "
                  "affected* — turns *I could not check* into *you are fine*."),
                 "",
                 "| Package | Version | Advisory | Why |", "|---|---|---|---|"]
         for u in unresolved[:60]:
-            out.append(f"| `{u.package}` | `{u.version}` | {u.vuln_id} | {u.reason} |")
+            out.append(f"| `{u.package}` | `{u.version}` | {u.vuln_id or '—'} | {u.reason} |")
         if len(unresolved) > 60:
             out.append(f"| … | | | {len(unresolved) - 60} more |")
         out.append("")

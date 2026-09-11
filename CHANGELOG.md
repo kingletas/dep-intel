@@ -10,6 +10,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **`docs/from-nothing.md`**, a guide from a clean machine to a first scan, a fix and a sweep, using an example lockfile.
 - **A release workflow.** Pushing a `vX.Y.Z` tag checks that the tag matches `dep-intel --version`, runs `make check`, and publishes a GitHub release whose notes are that version's section of this file.
+- **Mage-OS stores are checked against Magento's advisories.** Mage-OS locks no `magento/*` package, so until now its Magento CVEs were never checked and the store scanned clean. A `mage-os/product-*` edition is now matched as Magento Open Source at the version in its `extra.magento_version`. Each finding names the Magento version it was matched as, and the JSON report carries it as `matched_as`. An edition with no `extra.magento_version` is listed as undecided rather than passing as clean.
 
 ### Changed
 

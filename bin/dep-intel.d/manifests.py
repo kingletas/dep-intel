@@ -108,6 +108,22 @@ MAGENTO_METAPACKAGES = {
     "magento/project-community-edition",
 }
 
+# Mage-OS editions derive from Magento Open Source but carry their own version line.
+MAGE_OS_EDITION_PREFIX = "mage-os/product-"
+MAGE_OS_MATCHED_AS = "magento/product-community-edition"
+_MAGENTO_VERSION = re.compile(r"^\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z.]+)?$")
+
+
+@dataclass(frozen=True)
+class MatchedAs:
+    """The package and version advisories are looked up by, in place of the locked ones."""
+    name: str
+    version: str
+    source: str         # where the mapping was read from
+
+    def describe(self) -> str:
+        return f"{self.name} {self.version} (from {self.source})"
+
 
 @dataclass(frozen=True)
 class Package:
@@ -116,6 +132,8 @@ class Package:
     version: str
     scope: str          # runtime | dev
     manifest: str       # repo-relative path
+    matched_as: MatchedAs | None = None
+    unmatchable: str = ""   # why no advisory can be matched; reported as unresolved
 
 
 @dataclass
@@ -207,7 +225,26 @@ def parse_composer_lock(path: Path, root: Path) -> ParseResult:
             # under the Magento ecosystem, whose feed is built from NVD.
             if name in MAGENTO_METAPACKAGES:
                 out.append(Package("Magento", name, clean, scope, rel))
+            elif name.startswith(MAGE_OS_EDITION_PREFIX):
+                out.append(_mage_os_edition(p, name, clean, scope, rel))
     return ParseResult(out, skipped)
+
+
+def _mage_os_edition(entry: dict, name: str, version: str, scope: str,
+                     rel: str) -> Package:
+    """A Mage-OS edition, matched as the Magento release its `extra.magento_version` names."""
+    extra = entry.get("extra")
+    declared = extra.get("magento_version") if isinstance(extra, dict) else None
+    if isinstance(declared, str) and _MAGENTO_VERSION.match(declared):
+        mapping = MatchedAs(MAGE_OS_MATCHED_AS, declared, "extra.magento_version")
+        return Package("Magento", name, version, scope, rel, matched_as=mapping)
+    if declared is None:
+        why = "no extra.magento_version"
+    else:
+        why = f"extra.magento_version {str(declared)[:40]!r} is not a version"
+    return Package("Magento", name, version, scope, rel, unmatchable=(
+        f"{why}, so the Magento release it ships is unknown and Magento's "
+        "advisories were NOT checked"))
 
 
 def parse_package_lock(path: Path, root: Path) -> ParseResult:

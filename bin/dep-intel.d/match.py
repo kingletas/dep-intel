@@ -62,6 +62,7 @@ class Finding:
     confidence: str
     evidence: str
     refs: list = field(default_factory=list)
+    mapped_to: object = None    # manifests.MatchedAs when matched under another name
 
     @property
     def sort_key(self):
@@ -168,21 +169,32 @@ def scan_packages(conn, repo: str, packages, include_dev: bool = True):
     for pkg in packages:
         if pkg.scope == "dev" and not include_dev:
             continue
+        unmatchable = getattr(pkg, "unmatchable", "")
+        if unmatchable:
+            unresolved.append(Unresolved(
+                repo, pkg.manifest, pkg.ecosystem, pkg.name, pkg.version,
+                "", unmatchable))
+            continue
         # A Terraform provider is locked under `Terraform` and its advisories
         # are published under `Go`. The advisory ecosystem is what decides
         # both which rows to look at and which comparator orders them --
         # using the manifest name would find nothing and, worse, would leave
         # the version scheme undefined so every match came back unresolved.
         eco = E.advisory_ecosystem(pkg.ecosystem)
-        norm = V.normalize_name(eco, pkg.name)
+        mapped = getattr(pkg, "matched_as", None)
+        name, version = (mapped.name, mapped.version) if mapped else (pkg.name, pkg.version)
+        norm = V.normalize_name(eco, name)
         for row in _advisories_for(conn, eco, norm):
             affected, conf, evidence, fixed, reason = decide(
-                conn, row["aid"], eco, pkg.version
+                conn, row["aid"], eco, version
             )
             if affected is None:
+                reason = reason or "undecided"
+                if mapped:
+                    reason = f"{reason}; matched as {mapped.describe()}"
                 unresolved.append(Unresolved(
                     repo, pkg.manifest, pkg.ecosystem, pkg.name, pkg.version,
-                    row["id"], reason or "undecided"))
+                    row["id"], reason))
                 continue
             if not affected:
                 continue
@@ -201,6 +213,7 @@ def scan_packages(conn, repo: str, packages, include_dev: bool = True):
                 kev_ransomware=row["kev_ransomware"] or "",
                 fixed=fixed, confidence=conf, evidence=evidence,
                 refs=(row["refs"] or "").split("\n") if row["refs"] else [],
+                mapped_to=mapped,
             ))
     findings.sort(key=lambda f: f.sort_key)
     return findings, unresolved

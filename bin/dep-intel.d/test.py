@@ -809,6 +809,100 @@ def test_magento_metapackage_is_cross_listed():
               1)
 
 
+def _mage_os_lock(root: Path, edition_extra):
+    """A Mage-OS composer.lock: no magento/* package, only mage-os/* ones."""
+    edition = {"name": "mage-os/product-community-edition", "version": "9.1.0"}
+    if edition_extra is not None:
+        edition["extra"] = edition_extra
+    _write(root, "composer.lock", json.dumps({"packages": [
+        edition,
+        {"name": "mage-os/framework", "version": "9.1.0",
+         "replace": {"magento/framework": "103.0.1"}},
+        {"name": "mage-os/module-catalog", "version": "9.1.0",
+         "replace": {"magento/module-catalog": "104.0.1"}},
+    ]}))
+
+
+def test_mage_os_edition_is_matched_as_magento():
+    """Mage-OS locks no magento/* package, so its Magento CVEs went unchecked and it scanned clean."""
+    cve = {
+        "id": "CVE-2026-0005",
+        "descriptions": [{"lang": "en", "value": "An example."}],
+        "metrics": {"cvssMetricV31": [{"cvssData": {
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            "baseSeverity": "CRITICAL"}}]},
+        "configurations": [{"nodes": [{"cpeMatch": [
+            {"criteria": "cpe:2.3:a:adobe:magento_open_source:*:*:*:*:*:*:*:*",
+             "vulnerable": True, "versionStartIncluding": "2.4.0",
+             "versionEndExcluding": "2.4.7"},
+            {"criteria": "cpe:2.3:a:adobe:magento_open_source:2.4.8:p1:*:*:*:*:*:*",
+             "vulnerable": True},
+        ]}]}],
+    }
+    adv = nvd.to_osv(cve, ecosystems.REGISTRY["Magento"].cpe_products)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        conn = store.connect(Path(tmp) / "t.db")
+        _ingest(conn, [adv], ecosystem="Magento")
+
+        def scan(name, edition_extra):
+            root = Path(tmp) / name
+            root.mkdir()
+            _mage_os_lock(root, edition_extra)
+            pkgs, _skipped, _locks = manifests.collect(root)
+            return pkgs, *match.scan_packages(conn, str(root), pkgs)
+
+        pkgs, f, u = scan("affected", {"magento_version": "2.4.6-p3"})
+        check("only the edition is listed under Magento",
+              sorted(p.name for p in pkgs if p.ecosystem == "Magento"),
+              ["mage-os/product-community-edition"])
+        check("a Mage-OS edition on an affected Magento release is a finding",
+              [(x.package, x.version, x.vuln_id) for x in f],
+              [("mage-os/product-community-edition", "9.1.0", "CVE-2026-0005")])
+        check("the finding names the Magento release it was matched as",
+              (f[0].mapped_to.name, f[0].mapped_to.version) if f else None,
+              ("magento/product-community-edition", "2.4.6-p3"))
+        check("and nothing is left undecided", u, [])
+
+        meta = {"repo": "/r", "packages": len(pkgs), "lockfiles": 1,
+                "skipped": [], "notes": [], "synced": "2026-01-01"}
+        buf = io.StringIO()
+        report.render_text(f, u, meta, buf)
+        check("the text report says what it was matched as",
+              "matched as: magento/product-community-edition 2.4.6-p3" in buf.getvalue(),
+              True)
+        doc = json.loads(report.render_json(f, u, meta))
+        check("the json report carries the mapping",
+              doc["findings"][0].get("matched_as") if doc["findings"] else None,
+              {"package": "magento/product-community-edition",
+               "version": "2.4.6-p3", "from": "extra.magento_version"})
+
+        _pkgs, f, u = scan("enumerated", {"magento_version": "2.4.8-p1"})
+        check("an enumerated Magento release matches too", len(f), 1)
+
+        _pkgs, f, u = scan("clean", {"magento_version": "2.4.8-p2"})
+        check("a Mage-OS edition on a clean Magento release is not a finding",
+              (f, u), ([], []))
+
+        for label, extra in (("missing", {}), ("no-extra", None),
+                             ("php-empty-array", []),
+                             ("not-a-version", {"magento_version": "latest"})):
+            _pkgs, f, u = scan(label, extra)
+            check(f"{label}: no magento_version is not a finding", f, [])
+            check(f"{label}: and it is unresolved rather than clean",
+                  [(x.package, x.version) for x in u],
+                  [("mage-os/product-community-edition", "9.1.0")])
+            check(f"{label}: the reason names magento_version",
+                  "magento_version" in (u[0].reason if u else ""), True)
+
+        _pkgs, f, u = scan("text", {})
+        buf = io.StringIO()
+        report.render_text(f, u, {**meta, "packages": 4}, buf)
+        out = buf.getvalue()
+        check("an unmapped edition is printed", "NOT checked" in out, True)
+        check("and the verdict does not say clean", "clean" in out, False)
+
+
 def test_magento_patch_levels_order():
     # Composer ranks a patch level ABOVE the plain release, which is the rung
     # Magento's whole release line depends on.
