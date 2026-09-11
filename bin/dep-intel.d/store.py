@@ -223,8 +223,30 @@ def _migrate(conn) -> bool:
     return True
 
 
+class StoreError(Exception):
+    """The advisory store could not be opened or written."""
+
+
+def _describe(path: Path, err: Exception) -> str:
+    """One line naming the store and what went wrong with it."""
+    cause = " ".join(str(err).split())
+    if "readonly" in cause or isinstance(err, PermissionError):
+        return (f"the advisory store at {path} is not writable ({cause}); "
+                "make the file and its directory writable, or point "
+                "DEP_INTEL_DB at a store that is")
+    return f"the advisory store at {path} could not be opened ({cause})"
+
+
 def connect(path: Path | None = None) -> sqlite3.Connection:
+    """Open the store, creating or upgrading it; raises StoreError if it cannot be written."""
     path = Path(path) if path else default_path()
+    try:
+        return _open(path)
+    except (sqlite3.Error, OSError) as err:
+        raise StoreError(_describe(path, err)) from err
+
+
+def _open(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row

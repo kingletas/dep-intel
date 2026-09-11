@@ -16,8 +16,10 @@ are the cases a later refactor is most likely to break back:
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -27,6 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import cli
 import cvss
 import ecosystems
 import feeds
@@ -1536,6 +1539,80 @@ def test_gemfile_lock():
               len([r for r in skipped if "Gemfile.lock" in r[0]]), 2)
         check("Gemfile.lock is discovered as a lockfile",
               any(str(p).endswith("Gemfile.lock") for p in locks), True)
+
+
+def _run_cli(argv, env):
+    """Run the CLI in-process with extra environment; returns (status, stderr)."""
+    saved = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(err):
+            status = cli.main(argv)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    return status, err.getvalue()
+
+
+def test_exit_status_separates_a_finding_from_a_crash():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        db = root / "store" / "t.db"
+        conn = store.connect(db)
+        _ingest(conn, [_osv(
+            "ADV-CRITICAL", "Packagist", "acme/lib",
+            [{"type": "ECOSYSTEM",
+              "events": [{"introduced": "1.0.0"}, {"fixed": "2.0.0"}]}],
+            severity=[{"type": "CVSS_V3",
+                       "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}])])
+        conn.close()
+        _write(root, "repo/composer.lock", json.dumps(
+            {"packages": [{"name": "acme/lib", "version": "1.5.0"}]}))
+        scan = ["scan", str(root / "repo"), "--fail-on", "high",
+                "--format", "json", "--output", str(root / "report.json")]
+        env = {"DEP_INTEL_DB": str(db), "DEP_INTEL_DEBUG": ""}
+
+        check("a finding at the threshold exits 1", _run_cli(scan, env)[0], 1)
+        check("--no-fail reports it and exits 0",
+              _run_cli([*scan, "--no-fail"], env)[0], 0)
+
+        def crash(*_args, **_kwargs):
+            raise RuntimeError("matcher\nexploded")
+
+        real = match.scan_packages
+        match.scan_packages = crash
+        try:
+            status, err = _run_cli(scan, env)
+            _, debug_err = _run_cli(scan, {**env, "DEP_INTEL_DEBUG": "1"})
+        finally:
+            match.scan_packages = real
+        check("an unexpected error exits 2, never 1", status, 2)
+        check("it is one line naming the command and the error",
+              err, "dep-intel: scan failed: RuntimeError: matcher exploded "
+                   "(DEP_INTEL_DEBUG=1 prints the traceback)\n")
+        check("DEP_INTEL_DEBUG adds the traceback",
+              "Traceback" in debug_err, True)
+
+        # Root writes through a read-only mode, so there is nothing to test.
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            return
+        modes = {p: p.stat().st_mode for p in (db, db.parent)}
+        os.chmod(db, 0o444)
+        os.chmod(db.parent, 0o555)
+        try:
+            status, err = _run_cli(scan, env)
+        finally:
+            for p, mode in modes.items():
+                os.chmod(p, mode)
+        check("a read-only store exits 2, never 1", status, 2)
+        check("it names the store as not writable, in one line",
+              (str(db) in err, "is not writable" in err, err.count("\n")),
+              (True, True, 1))
 
 
 def main(argv) -> int:

@@ -178,8 +178,17 @@ answers *which of my repositories carry this*, from the local inventory, with no
 | `DEP_INTEL_ROOTS` | colon-separated roots for `sweep` (default: the current directory) |
 | `NVD_API_KEY` | raises the Magento feed's request rate. Optional — the feed works without one, only slower |
 | `NO_COLOR` | disable colour |
+| `DEP_INTEL_DEBUG` | set it to print the full traceback when a command fails |
 
-Exit `0` clean, `1` a finding breached the policy, `2` usage or environment error.
+## Exit status
+
+| Exit | Meaning |
+|---|---|
+| `0` | Clean, or `--no-fail` was passed |
+| `1` | A finding breached the policy. For `affected`, a repository carries the advisory; for `test`, an assertion failed |
+| `2` | The command could not run: a usage error, an environment it cannot support, a store it cannot open or write, a failed sync, or any unexpected error |
+
+**`1` only ever means a finding.** Anything that stops a command before it can decide exits `2` and prints one line on stderr saying what failed, so a CI step or a script reading the exit status never reports a vulnerability for a scan that did not run. A read-only store is named as such, with its path.
 
 ## What it cannot tell you
 

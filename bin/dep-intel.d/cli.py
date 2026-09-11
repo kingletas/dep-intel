@@ -63,19 +63,25 @@ Environment overrides:
     NVD_API_KEY         raises the Magento feed's request rate. Optional;
                         the feed works without one, only slower.
     NO_COLOR            disable terminal colour
+    DEP_INTEL_DEBUG     set to print the traceback when a command fails
 
 Exit status:
     0   clean, or reporting only
-    1   a finding breached the policy
-    2   usage error, or the environment cannot support the command
+    1   a finding breached the policy. For `affected`, a repository carries
+        the advisory; for `test`, an assertion failed. Nothing else exits 1
+    2   the command could not run: a usage error, an environment it cannot
+        support, a store it cannot open or write, a failed sync, or any
+        unexpected error. One line on stderr says what failed
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import sqlite3
 import subprocess
 import sys
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -734,6 +740,25 @@ def cmd_test(args) -> int:
                           check=False).returncode
 
 
+def _doctor_store():
+    """The store's lines in `doctor`, and whether it holds advisories it can use."""
+    try:
+        c = store.counts(store.connect())
+    except store.StoreError as e:
+        return False, [f"  advisories        UNAVAILABLE — {e}"]
+    lines = []
+    if c["vulnerabilities"] == 0:
+        lines.append("  advisories        EMPTY — run `dep-intel sync`")
+    else:
+        lines.append(f"  advisories        {c['vulnerabilities']}")
+    if c["packages"] == 0:
+        lines.append("  inventory         empty — `dep-intel sweep` populates it")
+    else:
+        lines.append(f"  inventory         {c['packages']} packages, "
+                     f"{c['repos']} repositories")
+    return c["vulnerabilities"] > 0, lines
+
+
 def cmd_doctor(args) -> int:
     ok = True
     print("\ndep-intel doctor\n")
@@ -750,18 +775,9 @@ def cmd_doctor(args) -> int:
         print("                    Rust dependencies from those projects are")
         print("                    absent. Install tomli, or run under")
         print("                    python 3.11+.")
-    conn = store.connect()
-    c = store.counts(conn)
-    if c["vulnerabilities"] == 0:
-        ok = False
-        print("  advisories        EMPTY — run `dep-intel sync`")
-    else:
-        print(f"  advisories        {c['vulnerabilities']}")
-    if c["packages"] == 0:
-        print("  inventory         empty — `dep-intel sweep` populates it")
-    else:
-        print(f"  inventory         {c['packages']} packages, "
-              f"{c['repos']} repositories")
+    store_ok, lines = _doctor_store()
+    ok = ok and store_ok
+    print("\n".join(lines))
     host_eco = hostpkgs.osv_ecosystem()
     if not hostpkgs.available():
         print("  host packages     dpkg-query not on PATH — `dep-intel host` "
@@ -856,11 +872,28 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         print("\ninterrupted", file=sys.stderr)
         return 2
-    except feeds.FeedError as e:
+    except (feeds.FeedError, store.StoreError) as e:
         print(f"dep-intel: {e}", file=sys.stderr)
         return 2
     except BrokenPipeError:
         return 0
+    except Exception as e:  # noqa: BLE001 - exit 1 must only ever mean a finding
+        return _crashed(args.command, e)
+
+
+def _crashed(command: str, err: Exception) -> int:
+    """Report an unexpected error in one line and exit 2, never 1."""
+    debug = bool(os.environ.get("DEP_INTEL_DEBUG"))
+    if debug:
+        traceback.print_exc()
+    cause = " ".join(str(err).split())
+    if isinstance(err, sqlite3.Error):
+        cause = f"the advisory store at {store.default_path()} failed ({cause})"
+    else:
+        cause = f"{type(err).__name__}: {cause}"
+    hint = "" if debug else " (DEP_INTEL_DEBUG=1 prints the traceback)"
+    print(f"dep-intel: {command} failed: {cause}{hint}", file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A crash exited 1, the same status as a finding.** A script or CI step that read the exit status reported a vulnerability when the scan never ran. Any error that stops a command now exits 2 with one line on stderr naming what failed, instead of a traceback; `DEP_INTEL_DEBUG=1` brings the traceback back. A read-only advisory store is named as not writable, with its path, and `doctor` reports it instead of crashing. The README has a new section setting out the exit statuses.
 - **The Markdown report's credit line was a wiki link to a note in a private notebook**, so it rendered as a broken link everywhere else. It names `dep-intel` in plain text now.
 - **Magento Open Source was missing most of its advisories.** Since 2023, NVD has filed Open Source issues under a different product name from the one `dep-intel` asked for. So a store on Open Source 2.4.6 was never told about CVE-2024-34102, which CISA lists as exploited. `dep-intel` now asks for both names. Run `dep-intel sync --ecosystem Magento` to fetch the missing advisories.
 - **`affected` could not find a Mage-OS store or any Terraform provider.** It matched the inventory by the name and ecosystem each package was locked under. A Mage-OS package is locked under its own name, and a Terraform provider's advisories are published under Go, so neither was ever found. Both are found now. `affected` also lists packages it could not decide, marked `?`, where before it left them out.

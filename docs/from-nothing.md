@@ -247,7 +247,9 @@ It exits with status 1 when any project carries the advisory, so you can use it 
 |---|---|
 | `0` | Nothing breached the policy, or you passed `--no-fail` |
 | `1` | A finding breached the policy: high severity or worse by default, or anything on CISA's known-exploited list |
-| `2` | A usage error, or the environment can't support the command, such as `doctor` finding an empty store |
+| `2` | The command couldn't run: a usage error, an environment it can't support (such as `doctor` finding an empty store), a store it can't write, or an unexpected error. One line on stderr says what failed |
+
+A `1` is always a finding. If the scan never ran, you get a `2`, never a `1`.
 
 That makes `dep-intel scan .` usable as a CI step as it stands. The README shows how to tune the policy with `--fail-on` and `--min-confidence`, and how to write SARIF for GitHub's code scanning.
 

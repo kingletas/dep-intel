@@ -15,7 +15,7 @@ set -euo pipefail
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 bin="$here/bin/dep-intel"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+trap 'chmod -R u+w "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT
 
 export DEP_INTEL_DB="$tmp/store.db"
 export NO_COLOR=1
@@ -38,6 +38,18 @@ check_out() {
     echo "  ok   $label"
   else
     echo "  FAIL $label -- expected to see: $needle"
+    printf '%s\n' "$out" | sed 's/^/         /' | head -8
+    fail=1
+  fi
+}
+check_status() {
+  local label="$1" want="$2"; shift 2
+  local out got=0
+  out="$("$@" 2>&1)" || got=$?
+  if [[ $got -eq $want ]]; then
+    echo "  ok   $label"
+  else
+    echo "  FAIL $label -- exit $got, expected $want"
     printf '%s\n' "$out" | sed 's/^/         /' | head -8
     fail=1
   fi
@@ -75,6 +87,46 @@ check_out  "json inventory lists the package" "acme/widget" \
 check      "sarif is valid json"              python3 -c "import json;json.load(open('$tmp/out.sarif'))"
 check_out  "sarif declares 2.1.0"             "2.1.0" \
            python3 -c "import json;print(json.load(open('$tmp/out.sarif'))['version'])"
+
+# Exit 1 means a finding and nothing else, so a caller can trust it. The store
+# is seeded with the unit suite's own helpers, since `sync` needs the network.
+mkdir -p "$tmp/found" "$tmp/seeded"
+seeded="$tmp/seeded/store.db"
+cat > "$tmp/found/composer.lock" <<'JSON'
+{"packages":[{"name":"acme/lib","version":"1.5.0"}],"packages-dev":[]}
+JSON
+DEP_INTEL_DB="$seeded" python3 - "$here/bin/dep-intel.d" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import store, test
+test._ingest(store.connect(), [test._osv(
+    "ADV-CRITICAL", "Packagist", "acme/lib",
+    [{"type": "ECOSYSTEM", "events": [{"introduced": "1.0.0"}, {"fixed": "2.0.0"}]}],
+    severity=[{"type": "CVSS_V3",
+               "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}])])
+PY
+check_status "a finding at --fail-on exits 1"   1 \
+             env DEP_INTEL_DB="$seeded" "$bin" scan "$tmp/found" --fail-on high
+check_status "a clean scan exits 0"             0 "$bin" scan "$tmp/repo" --fail-on high
+
+# A store that cannot be written stops the scan before it decides anything.
+if [[ $EUID -ne 0 ]]; then
+  chmod 444 "$seeded"; chmod 555 "$tmp/seeded"
+  check_status "a read-only store exits 2, not 1" 2 \
+               env DEP_INTEL_DB="$seeded" "$bin" scan "$tmp/found" --fail-on high
+  ro_out="$(DEP_INTEL_DB="$seeded" "$bin" scan "$tmp/found" 2>&1 || true)"
+  chmod 755 "$tmp/seeded"; chmod 644 "$seeded"
+  check_out  "a read-only store is named"         "is not writable" \
+             printf '%s\n' "$ro_out"
+  if [[ "$ro_out" == *Traceback* ]]; then
+    echo "  FAIL a read-only store printed a traceback"
+    fail=1
+  else
+    echo "  ok   a read-only store prints no traceback"
+  fi
+else
+  echo "  skip read-only store checks: root writes through file modes"
+fi
 
 # The new manifest formats, end to end through the installed wrapper. Each
 # one asserts the HONEST answer as much as the parsed one: a moving action
