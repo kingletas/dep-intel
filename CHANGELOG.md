@@ -19,6 +19,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **The Markdown report's credit line was a wiki link to a note in a private notebook**, so it rendered as a broken link everywhere else. It names `dep-intel` in plain text now.
+- **Magento Open Source was missing most of its advisories.** Since 2023, NVD has filed Open Source issues under a different product name from the one `dep-intel` asked for. So a store on Open Source 2.4.6 was never told about CVE-2024-34102, which CISA lists as exploited. `dep-intel` now asks for both names. Run `dep-intel sync --ecosystem Magento` to fetch the missing advisories.
 
 ## [1.2.0] — 2026-09-07
 

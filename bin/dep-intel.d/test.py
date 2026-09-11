@@ -914,6 +914,39 @@ def test_nvd_to_osv():
           nvd.to_osv({"id": "CVE-2026-0002", "configurations": []}, prods), {})
 
 
+def test_nvd_open_source_edition():
+    """NVD files recent Open Source advisories as adobe:magento with an open_source edition."""
+    prods = ecosystems.REGISTRY["Magento"].cpe_products
+    cve = {
+        "id": "CVE-2026-0006",
+        "configurations": [{"nodes": [{"cpeMatch": [
+            {"criteria": "cpe:2.3:a:adobe:magento:2.4.6:-:*:*:open_source:*:*:*",
+             "vulnerable": True},
+            {"criteria": "cpe:2.3:a:adobe:magento_open_source:2.4.5:p1:*:*:*:*:*:*",
+             "vulnerable": True},
+            {"criteria": "cpe:2.3:a:adobe:magento:2.3.0:-:*:*:commerce:*:*:*",
+             "vulnerable": True},
+            {"criteria": "cpe:2.3:a:adobe:magento:*:*:*:*:*:*:*:*",
+             "vulnerable": True, "versionEndExcluding": "2.3.1"},
+        ]}]}],
+    }
+    affected = nvd.to_osv(cve, prods)["affected"]
+    check("both Open Source products merge into one block",
+          [a["package"]["name"] for a in affected],
+          ["magento/product-community-edition"])
+    check("the open_source edition and the old product are both read",
+          affected[0]["versions"], ["2.4.5-p1", "2.4.6"])
+    check("an ANY edition covers Open Source",
+          affected[0]["ranges"],
+          [{"type": "ECOSYSTEM", "events": [{"introduced": "0"},
+                                            {"fixed": "2.3.1"}]}])
+    check("a commerce edition is not Open Source",
+          "2.3.0" in affected[0]["versions"], False)
+    check("an edition does not widen the product",
+          nvd._product_prefix("cpe:2.3:a:adobe:magento_open_source:1:*:*:*:open_source",
+                              "cpe:2.3:a:adobe:magento:*:*:*:*:open_source"), False)
+
+
 def test_host_release_detection():
     check("an LTS release maps to the LTS bucket",
           hostpkgs.osv_ecosystem({"ID": "ubuntu", "VERSION_ID": "24.04"}),

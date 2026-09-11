@@ -124,6 +124,9 @@ REGISTRY = {
             ("cpe:2.3:a:adobe:commerce", "magento/product-enterprise-edition"),
             ("cpe:2.3:a:adobe:magento_open_source",
              "magento/product-community-edition"),
+            # NVD files Open Source advisories since 2023 under this edition, not the product above.
+            ("cpe:2.3:a:adobe:magento:*:*:*:*:open_source",
+             "magento/product-community-edition"),
         ),
         note="Commerce is not on Packagist, so OSV has no advisory for it",
     ),

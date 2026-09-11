@@ -300,7 +300,9 @@ def _scan_one(conn, root: Path, args, meta_extra=None):
             "Magento findings come from NVD's CPE data, and its version "
             "ranges for Adobe products are not always consistent with the "
             "advisory text — CVE-2024-49521 is filed against Adobe Commerce "
-            "'3.2.5 and earlier' on a product line that is 2.4.x. The range "
+            "'3.2.5 and earlier' on a product line that is 2.4.x, and "
+            "CVE-2021-21013 against Open Source 'from 2.4.1' where its text "
+            "says '2.4.1 and earlier'. The range "
             "is reported as published rather than second-guessed; read the "
             "advisory before acting on a Magento range match")
     _warn_if_stale(conn, meta["notes"])

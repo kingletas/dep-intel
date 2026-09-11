@@ -134,7 +134,11 @@ def _product_prefix(criteria: str, prefix: str) -> bool:
     have = _cpe_parts(criteria)
     if len(have) < len(want):
         return False
-    return all(w == h for w, h in zip(want, have))
+    for i, (w, h) in enumerate(zip(want, have)):
+        # Past the product, `*` on either side is ANY, so it covers the attribute asked for.
+        if w != h and not (i > 4 and "*" in (w, h)):
+            return False
+    return True
 
 
 def _ranges_and_versions(cve: dict, prefix: str):
@@ -239,17 +243,18 @@ def to_osv(cve: dict, products) -> dict:
             if v.startswith("CWE-") and v not in cwes:
                 cwes.append(v)
 
-    affected = []
+    # Merged per package: two CPE products can name one package, and two blocks would report the CVE twice.
+    blocks = {}
     for prefix, package in products:
         ranges, exact = _ranges_and_versions(cve, prefix)
         if not ranges and not exact:
             continue
-        block = {"package": {"name": package, "ecosystem": "Magento"}}
-        if ranges:
-            block["ranges"] = ranges
-        if exact:
-            block["versions"] = exact
-        affected.append(block)
+        block = blocks.setdefault(
+            package, {"package": {"name": package, "ecosystem": "Magento"}})
+        for key, items in (("ranges", ranges), ("versions", exact)):
+            merged = block.setdefault(key, [])
+            merged.extend(x for x in items if x not in merged)
+    affected = [{k: v for k, v in b.items() if v} for b in blocks.values()]
     if not affected:
         return {}
 
