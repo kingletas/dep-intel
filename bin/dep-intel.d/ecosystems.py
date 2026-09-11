@@ -160,6 +160,11 @@ def advisory_ecosystem(manifest_ecosystem: str) -> str:
     return MANIFEST_TO_ADVISORY.get(manifest_ecosystem, manifest_ecosystem)
 
 
+def manifest_ecosystems(advisory: str) -> list:
+    """Every manifest ecosystem whose advisories are published under this one, itself first."""
+    return [advisory, *sorted(k for k, v in MANIFEST_TO_ADVISORY.items() if v == advisory)]
+
+
 def names() -> list:
     return sorted(REGISTRY)
 

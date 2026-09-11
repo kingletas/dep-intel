@@ -22,9 +22,10 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _DDL = """
 PRAGMA journal_mode = WAL;
@@ -130,6 +131,19 @@ CREATE TABLE IF NOT EXISTS affected_version (
 );
 CREATE INDEX IF NOT EXISTS ver_by_affected ON affected_version(affected_id);
 
+CREATE TABLE IF NOT EXISTS scan (
+    id          INTEGER PRIMARY KEY,
+    repo        TEXT NOT NULL,
+    started_at  TEXT NOT NULL,
+    packages    INTEGER,
+    findings    INTEGER,
+    unresolved  INTEGER,
+    tool_version TEXT
+);
+"""
+
+# Created after _migrate, which may have just dropped it to add columns.
+_INVENTORY_DDL = """
 -- The inventory: what is installed where. Written by `scan`, read by
 -- `affected` and `inventory`, and the reason a cross-repository CVE query is
 -- possible at all.
@@ -141,26 +155,23 @@ CREATE TABLE IF NOT EXISTS package (
     version     TEXT NOT NULL,
     scope       TEXT NOT NULL,          -- runtime|dev
     seen_at     TEXT NOT NULL,
+    -- One extra row per package it is also matched as; '' on the package's own row.
+    match_name    TEXT NOT NULL DEFAULT '',
+    match_version TEXT NOT NULL DEFAULT '',
+    unmatchable   TEXT NOT NULL DEFAULT '',   -- why no advisory can be decided
     -- `version` is part of the key, and it has to be. npm installs several
     -- versions of one package in nested node_modules, and a lockfile
     -- legitimately lists lodash twice at different versions. Keying without
     -- the version collapsed them to whichever row was written last, so the
     -- inventory lost 2,483 packages in one sweep and a cross-repository
     -- CVE query could answer "not affected" about a nested copy that was.
-    PRIMARY KEY (repo, manifest, ecosystem, name, version, scope)
+    PRIMARY KEY (repo, manifest, ecosystem, name, version, scope, match_name)
 );
 CREATE INDEX IF NOT EXISTS package_by_name ON package(ecosystem, name);
-
-CREATE TABLE IF NOT EXISTS scan (
-    id          INTEGER PRIMARY KEY,
-    repo        TEXT NOT NULL,
-    started_at  TEXT NOT NULL,
-    packages    INTEGER,
-    findings    INTEGER,
-    unresolved  INTEGER,
-    tool_version TEXT
-);
 """
+
+# Versions whose advisory tables are still current, so upgrading rebuilds only the inventory.
+_INVENTORY_ONLY_FROM = {5}
 
 
 def default_path() -> Path:
@@ -187,6 +198,12 @@ def _migrate(conn) -> bool:
     row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
     have = int(row[0]) if row else 0
     if have == SCHEMA_VERSION:
+        return False
+    if have in _INVENTORY_ONLY_FROM:
+        conn.execute("DROP TABLE IF EXISTS package")
+        conn.execute("UPDATE meta SET value = ? WHERE key = 'schema_version'",
+                     (str(SCHEMA_VERSION),))
+        conn.commit()
         return False
     # `package` is dropped too, and unlike the advisory tables it costs
     # nothing: the inventory is local and `dep-intel sweep` rebuilds it in
@@ -218,7 +235,25 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     )
     conn.commit()
     _migrate(conn)
+    conn.executescript(_INVENTORY_DDL)
     return conn
+
+
+def record_inventory(conn, repo: str, packages) -> None:
+    """Replace one repository's inventory: a row per package, plus a row per package it is also matched as."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    rows = []
+    for p in packages:
+        own = (repo, p.manifest, p.ecosystem, p.name, p.version, p.scope, now)
+        rows.append((*own, "", "", getattr(p, "unmatchable", "")))
+        rows.extend((*own, m.name, m.version, "") for m in getattr(p, "matched_as", ()))
+    conn.execute("DELETE FROM package WHERE repo = ?", (repo,))
+    conn.executemany(
+        "INSERT OR REPLACE INTO package"
+        "(repo, manifest, ecosystem, name, version, scope, seen_at, "
+        "match_name, match_version, unmatchable) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        rows)
+    conn.commit()
 
 
 def feed_status(conn) -> list[sqlite3.Row]:
@@ -234,6 +269,6 @@ def counts(conn) -> dict:
         "kev": one("SELECT COUNT(*) FROM vulnerability WHERE kev = 1"),
         "affected": one("SELECT COUNT(*) FROM affected"),
         "ecosystems": one("SELECT COUNT(DISTINCT ecosystem) FROM affected"),
-        "packages": one("SELECT COUNT(*) FROM package"),
+        "packages": one("SELECT COUNT(*) FROM package WHERE match_name = ''"),
         "repos": one("SELECT COUNT(DISTINCT repo) FROM package"),
     }

@@ -963,6 +963,93 @@ def test_replace_of_a_magento_package_is_followed():
           manifests._replaced({"replace": ["magento/framework"]}), ())
 
 
+def test_affected_reads_mappings_from_the_inventory():
+    """`affected` joined on the locked name, so Mage-OS and Terraform packages never matched."""
+    tf = _osv("GO-TERRAFORM", "Go", "github.com/hashicorp/terraform-provider-aws",
+              [{"type": "ECOSYSTEM",
+                "events": [{"introduced": "0"}, {"fixed": "5.1.0"}]}])
+    with tempfile.TemporaryDirectory() as tmp:
+        conn = store.connect(Path(tmp) / "t.db")
+        _ingest(conn, [_open_source_advisory()], ecosystem="Magento")
+        _ingest(conn, [_framework_advisory()])
+        _ingest(conn, [tf], ecosystem="Go")
+
+        def record(name, write):
+            root = Path(tmp) / name
+            root.mkdir()
+            write(root)
+            pkgs, _skipped, _locks = manifests.collect(root)
+            store.record_inventory(conn, name, pkgs)
+            return len(pkgs)
+
+        n = record("mapped", lambda r: _mage_os_lock(
+            r, {"magento_version": "2.4.6-p3"}, "103.0.6-p2"))
+        n += record("unmapped", lambda r: _mage_os_lock(r, None, "103.0.7"))
+        n += record("infra", lambda r: _write(r, ".terraform.lock.hcl", (
+            'provider "registry.terraform.io/hashicorp/aws" {\n'
+            '  version = "5.0.0"\n}\n')))
+        check("mapping rows are not counted as packages",
+              store.counts(conn)["packages"], n)
+
+        def hits(vid):
+            return sorted((h.repo, h.package, h.matched_as, bool(h.confidence))
+                          for h in match.inventory_hits(conn, vid))
+
+        check("a Magento CVE reaches a mapped edition, and names the unmapped one as undecided",
+              hits("CVE-2026-0005"),
+              [("mapped", "mage-os/product-community-edition",
+                "magento/product-community-edition 2.4.6-p3", True),
+               ("unmapped", "mage-os/product-community-edition", "", False)])
+        check("a replaced package is found on an affected version and not on a fixed one",
+              hits("ADV-FRAMEWORK"),
+              [("mapped", "mage-os/framework", "magento/framework 103.0.6-p2", True)])
+        check("Go advisories reach Terraform manifests",
+              ecosystems.manifest_ecosystems("Go"), ["Go", "Terraform"])
+        check("a Terraform provider is found under its Go advisory",
+              hits("GO-TERRAFORM"),
+              [("infra", "github.com/hashicorp/terraform-provider-aws", "", True)])
+        undecided = [h for h in match.inventory_hits(conn, "CVE-2026-0005")
+                     if not h.confidence]
+        check("the undecided edition carries its reason",
+              "magento_version" in (undecided[0].reason if undecided else ""), True)
+
+
+def test_inventory_schema_step_keeps_the_advisories():
+    """Adding inventory columns must not throw away a synced advisory store."""
+    def downgrade(path, version):
+        conn = store.connect(path)
+        _ingest(conn, [_framework_advisory()])
+        conn.execute("DROP TABLE package")
+        conn.execute("CREATE TABLE package (repo TEXT, manifest TEXT, ecosystem TEXT, "
+                      "name TEXT, version TEXT, scope TEXT, seen_at TEXT)")
+        conn.execute("INSERT INTO package VALUES ('r','m','Packagist','a/b','1','runtime','t')")
+        conn.execute("UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(version),))
+        conn.commit()
+        conn.close()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "five.db"
+        downgrade(path, 5)
+        conn = store.connect(path)
+        columns = [r[1] for r in conn.execute("PRAGMA table_info(package)")]
+        check("the inventory gains its mapping columns",
+              {"match_name", "match_version", "unmatchable"} <= set(columns), True)
+        check("the advisories survive the step", store.counts(conn)["vulnerabilities"], 1)
+        check("the old inventory is dropped rather than left unmapped",
+              store.counts(conn)["packages"], 0)
+        check("the schema is current", conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0],
+            str(store.SCHEMA_VERSION))
+        conn.close()
+
+        path = Path(tmp) / "four.db"
+        downgrade(path, 4)
+        conn = store.connect(path)
+        check("an older advisory schema is still rebuilt from the feed",
+              store.counts(conn)["vulnerabilities"], 0)
+        conn.close()
+
+
 def test_magento_patch_levels_order():
     # Composer ranks a patch level ABOVE the plain release, which is the rung
     # Magento's whole release line depends on.

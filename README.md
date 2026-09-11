@@ -33,7 +33,7 @@ The cost is a one-time ~400 MB download. The benefit is that your dependency gra
 
 > **One feed is a query rather than a download, and it is labelled as such.** Adobe Commerce ships from `repo.magento.com` rather than Packagist, so no bulk feed carries an advisory for it at all — `dep-intel` builds that one from NVD's CPE data instead. The query names a **product** and nothing else: no installed version, no package list, no repository name, no path. What NVD can learn is that somebody asked about Adobe Commerce, not what they are running.
 
-> **A Mage-OS store is checked as the Magento release it is built on.** Mage-OS locks no `magento/*` package, so its edition, `mage-os/product-community-edition`, is matched against Magento Open Source's advisories at the version in its `extra.magento_version`. Each Mage-OS module is checked as the `magento/*` package it replaces, at the exact version its `replace` names. A finding is reported against the Mage-OS package and names the Magento package and version it was matched as. An edition with no `extra.magento_version` is listed as undecided, never as clean.
+> **A Mage-OS store is checked as the Magento release it is built on.** Mage-OS locks no `magento/*` package, so its edition, `mage-os/product-community-edition`, is matched against Magento Open Source's advisories at the version in its `extra.magento_version`. Each Mage-OS module is checked as the `magento/*` package it replaces, at the exact version its `replace` names. A finding is reported against the Mage-OS package and names the Magento package and version it was matched as. An edition with no `extra.magento_version` is listed as undecided, never as clean. `dep-intel affected <CVE>` finds these packages the same way.
 
 ## Install
 

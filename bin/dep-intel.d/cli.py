@@ -335,15 +335,7 @@ def _emit(findings, unresolved, meta, args, default_stream=sys.stdout):
 
 
 def _record_inventory(conn, root: Path, packages):
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    conn.execute("DELETE FROM package WHERE repo = ?", (str(root),))
-    conn.executemany(
-        "INSERT OR REPLACE INTO package"
-        "(repo, manifest, ecosystem, name, version, scope, seen_at) "
-        "VALUES (?,?,?,?,?,?,?)",
-        [(str(root), p.manifest, p.ecosystem, p.name, p.version, p.scope, now)
-         for p in packages])
-    conn.commit()
+    store.record_inventory(conn, str(root), packages)
 
 
 def cmd_scan(args) -> int:
@@ -441,6 +433,9 @@ def cmd_inventory(args) -> int:
         print(_json.dumps([{
             "repo": str(r), "ecosystem": p.ecosystem, "name": p.name,
             "version": p.version, "scope": p.scope, "manifest": p.manifest,
+            "matched_as": [{"package": m.name, "version": m.version,
+                            "from": m.source} for m in p.matched_as],
+            "unmatchable": p.unmatchable,
         } for r, p in all_pkgs], indent=2))
     else:
         by_eco = {}
@@ -619,32 +614,23 @@ def cmd_affected(args) -> int:
         print(f"  severity: {v['severity']}"
               + (f" (CVSS {v['cvss_score']})" if v["cvss_score"] else "")
               + f", from {v['severity_source']}")
-        rows = list(conn.execute(
-            """SELECT DISTINCT p.repo, p.manifest, p.name, p.version, a.id AS aid
-               FROM affected a
-               JOIN package p ON p.ecosystem = a.ecosystem
-               WHERE a.vuln_id = ?
-                 AND p.name = a.package COLLATE NOCASE""", (vid,)))
-        hits = []
-        for r in rows:
-            # The ecosystem has to come from the affected row, not from the
-            # package row: version comparison is ecosystem-specific, and
-            # deciding a Packagist range with npm semver rules is how a
-            # comparator silently returns the wrong answer.
-            eco = conn.execute("SELECT ecosystem FROM affected WHERE id = ?",
-                               (r["aid"],)).fetchone()[0]
-            affected, conf, _evidence, fixed, _ = match.decide(
-                conn, r["aid"], eco, r["version"])
-            if affected:
-                hits.append((r, conf, fixed))
-        if not hits:
-            print("  ✓ no repository in the inventory carries an affected version")
-        for r, conf, fixed in hits:
+        hits = match.inventory_hits(conn, vid)
+        affected = [h for h in hits if h.confidence]
+        undecided = [h for h in hits if not h.confidence]
+        if not affected:
+            print("  ✓ no repository in the inventory is known to carry an affected version"
+                  + (", but some could not be decided" if undecided else ""))
+        for h in affected:
             total += 1
-            print(f"  ✗ {r['repo']}")
-            print(f"      {r['name']} {r['version']} ({r['manifest']}), "
-                  f"confidence {conf}, fixed in "
-                  f"{', '.join(fixed) or 'nothing published'}")
+            via = f", matched as {h.matched_as}" if h.matched_as else ""
+            print(f"  ✗ {h.repo}")
+            print(f"      {h.package} {h.version} ({h.manifest}){via}, "
+                  f"confidence {h.confidence}, fixed in "
+                  f"{', '.join(h.fixed) or 'nothing published'}")
+        for h in undecided:
+            via = f", matched as {h.matched_as}" if h.matched_as else ""
+            print(f"  ? {h.repo}")
+            print(f"      {h.package} {h.version} ({h.manifest}){via}: {h.reason}")
     if not store.counts(conn)["packages"]:
         print("\n  the inventory is empty — run `dep-intel sweep` first, "
               "otherwise this only ever answers 'no'")

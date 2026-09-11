@@ -228,6 +228,56 @@ def _lookups(pkg):
         yield mapped.name, mapped.version, mapped
 
 
+@dataclass
+class InventoryHit:
+    repo: str
+    manifest: str
+    package: str
+    version: str
+    matched_as: str     # "name version" of the mapping that matched, or ""
+    confidence: str     # "" when undecided
+    fixed: list
+    reason: str         # why it could not be decided, or ""
+
+
+def inventory_hits(conn, vuln_id: str) -> list:
+    """Every inventoried package one advisory affects or cannot be decided for."""
+    blocks = list(conn.execute(
+        "SELECT id, ecosystem, package FROM affected WHERE vuln_id = ?", (vuln_id,)))
+    hits = []
+    for block, r in _inventory_rows(conn, blocks):
+        # Decided under the advisory's ecosystem, whose comparator orders its bounds.
+        version = r["match_version"] or r["version"]
+        affected, conf, _evidence, fixed, reason = decide(
+            conn, block["id"], block["ecosystem"], version)
+        if affected is False:
+            continue
+        mapped = f"{r['match_name']} {version}" if r["match_name"] else ""
+        hits.append(InventoryHit(r["repo"], r["manifest"], r["name"], r["version"],
+                                 mapped, conf or "", fixed, reason or ""))
+    ecosystems = {e for b in blocks for e in E.manifest_ecosystems(b["ecosystem"])}
+    for eco in sorted(ecosystems):
+        for r in conn.execute(
+                """SELECT DISTINCT repo, manifest, name, version, unmatchable
+                   FROM package WHERE ecosystem = ? AND unmatchable != ''""", (eco,)):
+            hits.append(InventoryHit(r["repo"], r["manifest"], r["name"], r["version"],
+                                     "", "", [], r["unmatchable"]))
+    return hits
+
+
+def _inventory_rows(conn, blocks):
+    """(block, package row) for each inventoried package an affected block names, directly or through a mapping."""
+    for block in blocks:
+        for eco in E.manifest_ecosystems(block["ecosystem"]):
+            for r in conn.execute(
+                    """SELECT DISTINCT repo, manifest, name, version, match_name, match_version
+                       FROM package
+                       WHERE ecosystem = ? AND unmatchable = ''
+                         AND (CASE match_name WHEN '' THEN name ELSE match_name END)
+                             = ? COLLATE NOCASE""", (eco, block["package"])):
+                yield block, r
+
+
 def policy_verdict(findings, fail_on="high", min_confidence="high",
                    fail_on_kev=True):
     """Which findings breach the policy. Returns (failing, warning).

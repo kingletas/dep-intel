@@ -15,6 +15,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The inventory is cleared once when you upgrade.** It gains columns for the packages each package is also matched as. Your advisories are kept, so no re-sync is needed, but `affected` has nothing to search until you run `dep-intel sweep` or scan your repositories again.
+
 - **`sweep` walks the current directory when `DEP_INTEL_ROOTS` is not set.** The old default was a list of folders from one particular machine, so on anyone else's machine it walked folders that were not there. To sweep a fixed set of folders from anywhere, set `DEP_INTEL_ROOTS`, for example `export DEP_INTEL_ROOTS=~/code:~/work`.
 - **`make check` runs `ruff` as well as `shellcheck`**, and CI runs `make check` instead of its own list of the same steps. Pushes and pull requests run on Ubuntu only; the macOS run is still there, on demand.
 
@@ -22,6 +24,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **The Markdown report's credit line was a wiki link to a note in a private notebook**, so it rendered as a broken link everywhere else. It names `dep-intel` in plain text now.
 - **Magento Open Source was missing most of its advisories.** Since 2023, NVD has filed Open Source issues under a different product name from the one `dep-intel` asked for. So a store on Open Source 2.4.6 was never told about CVE-2024-34102, which CISA lists as exploited. `dep-intel` now asks for both names. Run `dep-intel sync --ecosystem Magento` to fetch the missing advisories.
+- **`affected` could not find a Mage-OS store or any Terraform provider.** It matched the inventory by the name and ecosystem each package was locked under. A Mage-OS package is locked under its own name, and a Terraform provider's advisories are published under Go, so neither was ever found. Both are found now. `affected` also lists packages it could not decide, marked `?`, where before it left them out.
 
 ## [1.2.0] — 2026-09-07
 

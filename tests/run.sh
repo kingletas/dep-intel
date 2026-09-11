@@ -119,6 +119,14 @@ check_out  "a moving action tag is not"           "moving tag"            "$bin"
 check_out  "the Magento metapackage is cross-listed" "Magento"            "$bin" inventory "$tmp/multi"
 check_out  "a scan names the ecosystems it could not check"            "no advisory feed has been synced"            "$bin" scan "$tmp/multi"
 
+# A Mage-OS store locks no magento/* package; it must still be matched as one.
+mkdir -p "$tmp/mageos"
+cat > "$tmp/mageos/composer.lock" <<'JSON'
+{"packages":[{"name":"mage-os/framework","version":"9.1.0","replace":{"magento/framework":"103.0.1"}},{"name":"mage-os/product-community-edition","version":"9.1.0"}],"packages-dev":[]}
+JSON
+check_out  "a Mage-OS module is matched as the package it replaces" '"package": "magento/framework"'            "$bin" inventory "$tmp/mageos" --format json
+check_out  "a Mage-OS edition with no Magento version is undecided"  "no extra.magento_version"            "$bin" scan "$tmp/mageos"
+
 # The host command must either name the release it is matching against, or
 # refuse. Matching a machine against the WRONG release clears real findings
 # and invents others, so refusing is the only honest third option -- and this
