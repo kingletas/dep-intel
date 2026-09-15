@@ -59,6 +59,11 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Install the linters make check runs
+        run: |
+          brew install shellcheck
+          pipx install ruff
+
       - name: make check
         run: make check
 

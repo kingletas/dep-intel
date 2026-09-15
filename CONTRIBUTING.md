@@ -18,7 +18,9 @@ answer in the pull request is: **what does this do when it cannot tell?**
 
 ## Getting set up
 
-There is nothing to install:
+The tool itself needs nothing but Python 3.9 and `bash`. `make check` also
+needs `shellcheck`, and `ruff` either on your `PATH` or reachable through
+[uv](https://docs.astral.sh/uv/), which `make check` will use if it finds it.
 
 ```bash
 git clone https://github.com/kingletas/dep-intel && cd dep-intel
@@ -91,4 +93,4 @@ Comments explain **why**, including what an earlier version got wrong. That
 is most of the value in a file like `versions.py`, where the code is short
 and the reasoning is not.
 
-`make check` runs `ruff` and `shellcheck` when they're installed and says "skipped" when they aren't. CI installs both, so a pull request has to pass them.
+`make check` runs `ruff` and `shellcheck`, and **fails when it cannot find one of them**. A linter that is missing is a check that did not run, not a check that passed. Reporting it as a skip let `ruff` go unrun here for weeks while `make check` printed "lint and tests pass". `ruff` is also reached through `uv tool run` when it is not on your `PATH`, and the line says which route it took.

@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+#
+# lint-tool -- run one linter, and never report green because it is missing.
+#
+# Usage:
+#   scripts/lint-tool <linter> <argument>...
+#
+# Examples:
+#   scripts/lint-tool shellcheck bin/thing tests/run.sh
+#   scripts/lint-tool ruff check --quiet bin/thing.d/
+#
+# A linter that is not installed is an UNRUN check, not a passing one, so this
+# exits non-zero and says how to install it. A skip that still reports green
+# lets `make check` print "lint and tests pass" over a lane nothing looked at.
+#
+# A Python linter is also reached through uv, which is how ruff runs on a
+# machine that has uv but no ruff on PATH. The route taken is printed beside
+# the result, because "ok" on its own cannot tell a real run from a skipped one.
+
+set -euo pipefail
+
+usage() { sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+[[ "${1:-}" =~ ^(-h|--help)$ ]] && { usage; exit 0; }
+
+tool="${1:-}"
+[[ -n "$tool" ]] || { echo "lint-tool: no linter named" >&2; exit 2; }
+shift
+[[ $# -gt 0 ]] || { echo "lint-tool: $tool was given nothing to check" >&2; exit 2; }
+
+# How to install each linter, printed when it is missing. A failure that does
+# not say what to do about it gets worked around rather than fixed.
+case "$tool" in
+  ruff)       hint='uv tool install ruff   or   pipx install ruff' ;;
+  shellcheck) hint='sudo apt-get install shellcheck   or   brew install shellcheck' ;;
+  *)          hint='' ;;
+esac
+
+# NONE is a sentinel rather than an empty array: bash 3.2, which is what macOS
+# ships, treats an empty array expansion under `set -u` as an unbound variable.
+runner=(NONE)
+route=''
+if command -v "$tool" >/dev/null 2>&1; then
+  runner=("$tool")
+elif [[ "$tool" == ruff ]] && command -v uvx >/dev/null 2>&1; then
+  runner=(uvx "$tool")
+  route=' (via uvx)'
+elif [[ "$tool" == ruff ]] && command -v uv >/dev/null 2>&1; then
+  runner=(uv tool run "$tool")
+  route=' (via uv tool run)'
+fi
+
+printf '  %-14s ' "$tool"
+
+if [[ "${runner[0]}" == NONE ]]; then
+  echo "FAILED -- not installed, so this check did not run"
+  if [[ -n "$hint" ]]; then
+    echo "    install it:  $hint"
+  fi
+  exit 1
+fi
+
+if output="$("${runner[@]}" "$@" 2>&1)"; then
+  echo "ok${route}"
+  if [[ -n "$output" ]]; then
+    printf '%s\n' "$output" | sed 's/^/    /'
+  fi
+  exit 0
+fi
+
+echo "FAILED${route}"
+printf '%s\n' "$output" | sed 's/^/    /'
+exit 1

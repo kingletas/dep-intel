@@ -205,6 +205,32 @@ sweep_out="$( { cd "$tmp" && env -u DEP_INTEL_ROOTS "$bin" sweep --no-fail; } 2>
 check_out  "sweep defaults to the current directory" "1 repositories under $(cd "$tmp" && pwd -P)" \
            printf '%s\n' "$sweep_out"
 
+# --- the linter runner ------------------------------------------------------
+#
+# A linter that cannot be found has to FAIL rather than skip. A skip that still
+# exits 0 lets `make check` print "lint and tests pass" over a lane nothing
+# looked at, which is how ruff went unrun here for weeks. Stand-ins are used
+# rather than real linters, so this suite does not depend on one being present.
+
+lintbin="$tmp/linters"
+mkdir -p "$lintbin"
+printf '#!/bin/sh\nexit 0\n' > "$lintbin/uvx"
+chmod +x "$lintbin/uvx"
+
+check_status "a linter that runs clean passes"       0 "$here/scripts/lint-tool" true anything
+check_status "a linter that reports a problem fails" 1 "$here/scripts/lint-tool" false anything
+check_status "a missing linter fails"                1 "$here/scripts/lint-tool" no-such-linter anything
+check_out    "and says it did not run"               "not installed, so this check did not run" \
+             "$here/scripts/lint-tool" no-such-linter anything
+check_status "a linter given nothing to check is refused" 2 "$here/scripts/lint-tool" true
+
+# /usr/bin:/bin is a PATH with neither ruff nor uv on it, so these two decide
+# the fallback rather than whatever this machine happens to have installed.
+check_out    "ruff is reached through uv when it is not on PATH" "via uvx" \
+             env PATH="$lintbin:/usr/bin:/bin" "$here/scripts/lint-tool" ruff check .
+check_status "ruff with no uv either is a failure, not a skip" 1 \
+             env PATH=/usr/bin:/bin "$here/scripts/lint-tool" ruff check .
+
 echo
 if [[ $fail -eq 0 ]]; then
   echo "  all end-to-end checks passed"

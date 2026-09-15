@@ -38,8 +38,8 @@ test: ## The end-to-end suite
 
 .PHONY: lint
 lint: ## Static checks
-	@printf '  %-14s ' shellcheck; if command -v shellcheck >/dev/null 2>&1; then shellcheck bin/dep-intel scripts/install tests/run.sh packaging/release-notes.sh && echo ok; else echo 'skipped (not installed)'; fi
-	@printf '  %-14s ' ruff; if command -v ruff >/dev/null 2>&1; then ruff check --quiet bin/dep-intel.d/ && echo ok; else echo 'skipped (not installed)'; fi
+	@scripts/lint-tool shellcheck bin/dep-intel scripts/install scripts/lint-tool tests/run.sh packaging/release-notes.sh
+	@scripts/lint-tool ruff check --quiet bin/dep-intel.d/
 
 .PHONY: check
 check: lint test ## Everything a commit has to pass
