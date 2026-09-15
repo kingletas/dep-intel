@@ -102,6 +102,12 @@ Severity is a property of the weakness. Confidence is a property of *this partic
 | `very-high` | A bounded version range, or the advisory's version list naming this exact version |
 | `high` | An open-ended range: introduced, with no published fix |
 
+### What reads first
+
+Findings are ordered by known-exploited, then severity, then **runtime before dev**, then confidence. Scope breaks a tie inside a severity band and never across one: a critical in a build dependency still reads above a high in the application, and a known-exploited entry still leads whatever its scope, because an exploited build dependency is a supply chain rather than a footnote.
+
+The tie-break matters more than it sounds. On one Magento webroot, 91 of 146 findings were dev-scope build tooling, so everything that actually reaches production read last. `--no-dev` drops them entirely if you would rather not see them at all.
+
 There is no `medium`. An advisory that names your exact version is the most specific claim it can make, so it is graded the same whether or not the advisory also publishes ranges. A range that does not cover your version says nothing about it, and cannot weaken a statement that names it.
 
 ### What you are told to upgrade to

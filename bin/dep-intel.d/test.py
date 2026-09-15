@@ -609,6 +609,43 @@ def test_policy():
     check("known-exploited sorts first", ordered_findings[0].kev, True)
 
 
+def test_runtime_sorts_above_dev_without_outranking_severity():
+    """A Magento tree's build toolchain carries more advisories than the store.
+
+    On one real webroot 91 of 146 findings were dev scope, so the findings
+    that reach production read last. Scope now breaks the tie inside a
+    severity band, and only inside it: a critical in a build dependency is
+    still worse than a high in the application.
+    """
+    def f(severity, scope, package, **kw):
+        return _finding(severity=severity, scope=scope, package=package, **kw)
+
+    order = lambda fs: [x.package for x in sorted(fs, key=lambda y: y.sort_key)]
+
+    # Named so that the package tie-break, which is the LAST key, would put
+    # them the other way round. A case the old ordering also passed proves
+    # nothing about the rule that replaced it.
+    check("inside one severity, runtime reads before dev",
+          order([f("high", "dev", "a/dev"), f("high", "runtime", "z/run")]),
+          ["z/run", "a/dev"])
+    # The loud direction is easy; this is the one that says the rule is a
+    # tie-break and not a new top-level axis.
+    check("a critical in a build dependency still outranks a high in the app",
+          order([f("high", "runtime", "a/run"), f("critical", "dev", "z/dev")]),
+          ["z/dev", "a/run"])
+    check("known-exploited still leads, whatever its scope",
+          order([f("critical", "runtime", "a/run"),
+                 f("low", "dev", "z/dev", kev=True)]),
+          ["z/dev", "a/run"])
+    check("scope breaks a tie before confidence does",
+          order([f("high", "dev", "a/dev", confidence="certain"),
+                 f("high", "runtime", "z/run", confidence="high")]),
+          ["z/run", "a/dev"])
+    check("an unrecognised scope sorts with runtime, not below dev",
+          order([f("high", "dev", "a/dev"), f("high", "optional", "z/opt")]),
+          ["z/opt", "a/dev"])
+
+
 def test_output_shapes():
     meta = {"repo": "/r", "packages": 3, "lockfiles": 1, "skipped": [],
             "notes": [], "synced": "2026-08-26T00:00:00+00:00",

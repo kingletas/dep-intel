@@ -37,6 +37,10 @@ SEVERITY_ORDER = {
 CONFIDENCE_ORDER = {
     "certain": 4, "very-high": 3, "high": 2, "medium": 1, "low": 0,
 }
+# What the application runs, then what only builds it. An unknown scope sorts
+# with runtime rather than below it: a scope nobody recognised is not evidence
+# that the package is harmless.
+SCOPE_ORDER = {"runtime": 0, "dev": 2}
 
 
 @dataclass
@@ -68,12 +72,21 @@ class Finding:
 
     @property
     def sort_key(self):
-        # KEV first, then severity, then confidence. KEV outranks CVSS because
-        # "someone is exploiting this today" is a different kind of fact from
-        # "this would be bad if exploited".
+        # KEV first, then severity, then runtime before dev, then confidence.
+        # KEV outranks CVSS because "someone is exploiting this today" is a
+        # different kind of fact from "this would be bad if exploited", and it
+        # outranks scope for the same reason: an exploited build dependency is
+        # a supply chain, not a footnote.
+        #
+        # Scope sits below severity and above confidence: what the application
+        # runs outranks what only builds it, but not by enough to lift a low
+        # finding over a critical one. On a Magento tree the build toolchain
+        # carries more advisories than the store does, so without this the
+        # findings that reach production read last.
         return (
             0 if self.kev else 1,
             -SEVERITY_ORDER.get(self.severity, 0),
+            SCOPE_ORDER.get(self.scope, 1),
             -CONFIDENCE_ORDER.get(self.confidence, 0),
             self.package,
         )

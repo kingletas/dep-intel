@@ -15,6 +15,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Runtime findings read before dev ones.** Scope now breaks the tie inside a severity band, below severity and above confidence, so what the application runs comes first and what only builds it comes after. It does not cross a band: a critical in a build dependency still reads above a high in the application, and a known-exploited entry still leads whatever its scope. On one Magento webroot 91 of 146 findings were dev-scope build tooling, which left everything reaching production at the bottom of the list. `--no-dev` still drops them outright.
 - **The inventory is cleared once when you upgrade.** It gains columns for the packages each package is also matched as. Your advisories are kept, so no re-sync is needed, but `affected` has nothing to search until you run `dep-intel sweep` or scan your repositories again.
 
 - **`sweep` walks the current directory when `DEP_INTEL_ROOTS` is not set.** The old default was a list of folders from one particular machine, so on anyone else's machine it walked folders that were not there. To sweep a fixed set of folders from anywhere, set `DEP_INTEL_ROOTS`, for example `export DEP_INTEL_ROOTS=~/code:~/work`.
