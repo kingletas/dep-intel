@@ -99,9 +99,20 @@ Severity is a property of the weakness. Confidence is a property of *this partic
 | Confidence | What produced it |
 |---|---|
 | `certain` | A version range **and** the advisory's own version list agree |
-| `very-high` | A bounded version range, or an enumeration where no ranges are published |
-| `high` | An open-ended range — introduced, with no published fix |
-| `medium` | The advisory lists this exact version although its ranges exclude it |
+| `very-high` | A bounded version range, or the advisory's version list naming this exact version |
+| `high` | An open-ended range: introduced, with no published fix |
+
+There is no `medium`. An advisory that names your exact version is the most specific claim it can make, so it is graded the same whether or not the advisory also publishes ranges. A range that does not cover your version says nothing about it, and cannot weaken a statement that names it.
+
+### What you are told to upgrade to
+
+An advisory carries every fix bound it has ever published, not only the one that applies to the version you run. `dep-intel` offers you only the fixes **above** your version. A bound at or below it is reported as superseded rather than as remediation, because upgrading to it would move you backwards through everything fixed since:
+
+```text
+fixed in:   no fix published above 2.4.8-p2 (the advisory's 2.4.4 is already behind it)
+```
+
+That is a different fact from an advisory with no fix at all, which still reads `no fixed version published`. JSON carries the two as `fixed_versions` and `superseded_fixes`. A bound that will not parse stays in `fixed_versions`, for the same reason an undecided match is never reported as clean.
 
 CI applies both axes:
 

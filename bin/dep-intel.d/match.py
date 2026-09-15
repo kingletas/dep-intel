@@ -62,6 +62,8 @@ class Finding:
     confidence: str
     evidence: str
     refs: list = field(default_factory=list)
+    superseded: list = field(default_factory=list)  # published fixes already at or below `version`
+    also_affects: list = field(default_factory=list)  # editions this store ships that carry the same advisory
     mapped_to: object = None    # manifests.MatchedAs when matched under another name
 
     @property
@@ -153,14 +155,43 @@ def decide(conn, aid: int, ecosystem: str, version: str):
         return (None, None, None, fixed,
                 (f"version {version!r} or an advisory bound will not parse "
                  f"under {ecosystem} version rules"))
-    # Ranges parsed cleanly and none matched. If the enumeration disagrees,
-    # believe the enumeration and say why -- it is a published statement about
-    # this exact version, which a range is not.
+    # Ranges parsed cleanly and none matched, but the enumeration names this
+    # exact version. That is the same direct claim an enumeration-only
+    # advisory makes, so it is graded the same. A range that does not cover
+    # the version says nothing about it and cannot weaken a statement that
+    # names it -- NVD caps a Magento range where its CPE enumeration takes
+    # over, so the range is the older half of the record and the list is the
+    # newer one.
     if in_enum:
-        return (True, "medium",
-                "advisory lists this exact version although its ranges exclude it",
-                fixed, None)
+        evidence = ("listed in the advisory's affected versions, which its "
+                    "published ranges do not cover")
+        return True, "very-high", evidence, fixed, None
     return False, None, None, fixed, None
+
+
+def remediation(ecosystem: str, version: str, fixed):
+    """(fixes worth upgrading to, fixes already behind `version`).
+
+    A published fix at or below what is installed is not a remediation. It is
+    the upper bound of an earlier range, or the point where a CPE record
+    stopped using a range and began listing versions one by one -- and an
+    advisory carries every bound it has ever published, not only the one that
+    matched. Printing it tells a store on 2.4.8-p2 to upgrade to 2.4.4, which
+    is worse advice than none: it reads as actionable, it is not, and acting
+    on it moves the store backwards into everything fixed since.
+
+    A bound that will not parse stays in the actionable list. Dropping it
+    would be a scanner deciding silently that a fix it could not read is a
+    fix nobody needs.
+    """
+    ahead, behind = [], []
+    for v in fixed:
+        try:
+            order = V.compare(ecosystem, v, version)
+        except (TypeError, ValueError):
+            order = None
+        (behind if order is not None and order <= 0 else ahead).append(v)
+    return ahead, behind
 
 
 def scan_packages(conn, repo: str, packages, include_dev: bool = True):
@@ -190,6 +221,7 @@ def scan_packages(conn, repo: str, packages, include_dev: bool = True):
                 affected, conf, evidence, fixed, reason = decide(
                     conn, row["aid"], eco, version
                 )
+                fixed, superseded = remediation(eco, version, fixed)
                 if affected is None:
                     reason = reason or "undecided"
                     if mapped:
@@ -215,10 +247,44 @@ def scan_packages(conn, repo: str, packages, include_dev: bool = True):
                     kev_ransomware=row["kev_ransomware"] or "",
                     fixed=fixed, confidence=conf, evidence=evidence,
                     refs=(row["refs"] or "").split("\n") if row["refs"] else [],
+                    superseded=superseded,
                     mapped_to=mapped,
                 ))
+    findings = _fold_contained_editions(findings, packages)
     findings.sort(key=lambda f: f.sort_key)
     return findings, unresolved
+
+
+def _fold_contained_editions(findings, packages):
+    """One advisory against one store is one finding, not one per edition.
+
+    Adobe Commerce ships Magento Open Source inside it at the same version, so
+    a Commerce lockfile holds both metapackages and NVD files the same CVE
+    against both CPE products. Left alone that prints every Adobe advisory
+    twice -- and the two lines disagree, because each CPE product caps its
+    range at a different release, so the reader is handed two remediations for
+    one store and no way to tell which is theirs.
+
+    The contained edition's finding is folded into the container's and named
+    there, so nothing is dropped: an advisory that reaches only the contained
+    edition never had a container finding to fold into and is reported as it
+    stands.
+    """
+    contained = {p.name: p.contained_by for p in packages
+                 if getattr(p, "contained_by", "")}
+    if not contained:
+        return findings
+    by_key = {(f.manifest, f.vuln_id, f.package, f.version): f for f in findings}
+    kept = []
+    for f in findings:
+        container = contained.get(f.package)
+        host = by_key.get((f.manifest, f.vuln_id, container, f.version)) if container else None
+        if host is None:
+            kept.append(f)
+            continue
+        if f.package not in host.also_affects:
+            host.also_affects.append(f.package)
+    return kept
 
 
 def _lookups(pkg):

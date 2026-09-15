@@ -270,9 +270,10 @@ def _ingest(conn, advisories, ecosystem="Packagist"):
 
 class Pkg:
     def __init__(self, ecosystem, name, version, scope="runtime",
-                 manifest="composer.lock"):
+                 manifest="composer.lock", contained_by=""):
         self.ecosystem, self.name, self.version = ecosystem, name, version
         self.scope, self.manifest = scope, manifest
+        self.contained_by = contained_by
 
 
 def test_matcher():
@@ -333,6 +334,12 @@ def test_matcher():
               scan("acme/windows", "2.0.0")[0], [])
         check("inside the second window is affected",
               len(scan("acme/windows", "3.2.0")[0]), 1)
+        # An advisory carries every bound it ever published, not only the one
+        # that matched. Offering 1.5.0 to a caller on 3.2.0 is an upgrade
+        # backwards through everything fixed since.
+        f, _ = scan("acme/windows", "3.2.0")
+        check("a fix behind the installed version is not offered",
+              (f[0].fixed, f[0].superseded), (["3.5.0"], ["1.5.0"]))
 
         f, u = scan("acme/bad", "1.0.0")
         check("unparseable bound is unresolved, not clean", (len(f), len(u)), (0, 1))
@@ -342,6 +349,156 @@ def test_matcher():
               (len(f), len(u)), (0, 0))
         check("GIT range still lets the version range decide",
               len(scan("acme/git", "1.0.0")[0]), 1)
+
+
+def test_a_fix_behind_the_installed_version_is_not_remediation():
+    """NVD caps a Magento CPE range where its version enumeration takes over.
+
+    That bound is a change of notation, not a release that fixed anything, and
+    reading it as remediation told a store on 2.4.8-p2 to upgrade to 2.4.4 --
+    76 of 165 lines in one scan of a stock Adobe Commerce tree.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        conn = store.connect(Path(tmp) / "t.db")
+        _ingest(conn, [
+            _osv("ADV-BEHIND", "Packagist", "acme/behind",
+                 [{"type": "ECOSYSTEM",
+                   "events": [{"introduced": "0"}, {"fixed": "2.4.4"}]}],
+                 versions=["2.4.8-p2"]),
+            _osv("ADV-AHEAD", "Packagist", "acme/ahead",
+                 [{"type": "ECOSYSTEM",
+                   "events": [{"introduced": "0"}, {"fixed": "2.9.1"}]}]),
+        ])
+
+        def scan(name, version):
+            return match.scan_packages(
+                conn, "/repo", [Pkg("Packagist", name, version)])[0]
+
+        f = scan("acme/behind", "2.4.8-p2")
+        check("the bound behind the installed version is not offered as a fix",
+              (f[0].fixed, f[0].superseded), ([], ["2.4.4"]))
+        check("a finding with a superseded bound says so, not 'none published'",
+              report._remediation_line(f[0]),
+              "no fix published above 2.4.8-p2 "
+              "(the advisory's 2.4.4 is already behind it)")
+
+        # The quiet direction: a real forward fix is still handed over, and a
+        # gate that only ever suppresses is a gate nobody should trust.
+        f = scan("acme/ahead", "2.8.0")
+        check("a fix ahead of the installed version is still offered",
+              (f[0].fixed, f[0].superseded), (["2.9.1"], []))
+        check("nothing superseded reads as nothing published",
+              report._remediation_line(f[0]), "no fixed version published")
+
+        # A bound that will not parse stays offered. Dropping it would be a
+        # scanner deciding on its own that a fix it could not read is a fix
+        # nobody needs -- the same "undecided is not clean" rule, applied to
+        # remediation instead of to the verdict.
+        check("an unparseable bound is still offered, never swallowed",
+              match.remediation("Packagist", "1.0.0", ["not-a-version"]),
+              (["not-a-version"], []))
+
+
+def test_an_enumerated_version_is_not_downgraded_by_a_range_that_misses_it():
+    """An advisory naming your exact build is the strongest claim it can make.
+
+    Grading that `medium` because some range fails to cover it told the reader
+    to discount the one kind of evidence that is about them -- and an
+    enumeration with no ranges at all was already graded `very-high`, so the
+    same evidence lost two grades for the company it kept.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        conn = store.connect(Path(tmp) / "t.db")
+        _ingest(conn, [
+            _osv("ADV-PAST-RANGE", "Packagist", "acme/past",
+                 [{"type": "ECOSYSTEM",
+                   "events": [{"introduced": "0"}, {"fixed": "2.4.4"}]}],
+                 versions=["2.4.8-p2"]),
+        ])
+
+        def scan(version):
+            return match.scan_packages(
+                conn, "/repo", [Pkg("Packagist", "acme/past", version)])[0]
+
+        f = scan("2.4.8-p2")
+        check("an enumerated version past the range is very-high",
+              (len(f), f[0].confidence if f else None), (1, "very-high"))
+        check("and the evidence states the fact rather than a contradiction",
+              "do not cover" in f[0].evidence, True)
+        # The quiet direction: a version neither the range nor the list names
+        # is still not a finding.
+        check("a version in neither the range nor the list is clean",
+              scan("2.4.9"), [])
+
+
+def test_one_store_is_one_finding_per_advisory():
+    """Adobe Commerce ships Open Source inside it at the same version.
+
+    NVD files one CVE against both CPE products, so a Commerce lockfile
+    reported every Adobe advisory twice -- 129 lines for 65 CVEs, and the two
+    lines disagreed on the remediation because each product capped its range
+    at a different release.
+    """
+    def advisory(vid, packages):
+        return {"id": vid, "modified": "2026-01-01T00:00:00Z",
+                "affected": [{"package": {"name": n, "ecosystem": "Magento"},
+                              "ranges": [], "versions": ["2.4.8-p2"]}
+                             for n in packages]}
+
+    EE = "magento/product-enterprise-edition"
+    CE = "magento/product-community-edition"
+    with tempfile.TemporaryDirectory() as tmp:
+        conn = store.connect(Path(tmp) / "t.db")
+        _ingest(conn, [advisory("CVE-BOTH", [EE, CE]),
+                       advisory("CVE-CE-ONLY", [CE])], ecosystem="Magento")
+
+        ee = Pkg("Magento", EE, "2.4.8-p2")
+        ce = Pkg("Magento", CE, "2.4.8-p2", contained_by=EE)
+        f, _ = match.scan_packages(conn, "/repo", [ee, ce])
+        check("one advisory against one store is one finding",
+              sorted({x.vuln_id for x in f}), ["CVE-BOTH", "CVE-CE-ONLY"])
+        both = [x for x in f if x.vuln_id == "CVE-BOTH"]
+        check("the shared advisory is reported once, under the edition installed",
+              (len(both), both[0].package), (1, EE))
+        check("and names the edition it absorbed rather than dropping it",
+              both[0].also_affects, [CE])
+        ce_only = [x for x in f if x.vuln_id == "CVE-CE-ONLY"]
+        check("an advisory reaching only the contained edition is still reported",
+              (len(ce_only), ce_only[0].package), (1, CE))
+
+        # The quiet direction: with no containment declared they are two
+        # installs, and both findings stand.
+        f, _ = match.scan_packages(
+            conn, "/repo", [ee, Pkg("Magento", CE, "2.4.8-p2")])
+        check("without a declared containment nothing is folded",
+              len([x for x in f if x.vuln_id == "CVE-BOTH"]), 2)
+
+
+def test_containment_is_read_from_the_lockfile_not_assumed():
+    """Only an exact-version `require` between the editions makes them one store."""
+    EE = "magento/product-enterprise-edition"
+    CE = "magento/product-community-edition"
+
+    def lock(spec):
+        return {"packages": [
+            {"name": EE, "version": "2.4.8-p2",
+             "require": {CE: spec, "php": "~8.3.0"}},
+            {"name": CE, "version": "2.4.8-p2"},
+        ]}
+
+    def contained_by(doc):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "composer.lock"
+            path.write_text(json.dumps(doc), encoding="utf-8")
+            pkgs = manifests.parse_composer_lock(path, Path(tmp)).packages
+        return {p.name: p.contained_by for p in pkgs if p.ecosystem == "Magento"}
+
+    check("an exact-version require makes the edition contained",
+          contained_by(lock("2.4.8-p2")), {EE: "", CE: EE})
+    check("a constraint that is not the locked version does not",
+          contained_by(lock("^2.4.0")), {EE: "", CE: ""})
+    check("a require on a different version does not",
+          contained_by(lock("2.4.7-p3")), {EE: "", CE: ""})
 
 
 def test_case_and_ecosystem_folding():

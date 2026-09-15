@@ -138,6 +138,7 @@ class Package:
     manifest: str       # repo-relative path
     matched_as: tuple = ()  # MatchedAs entries looked up besides the package's own name
     unmatchable: str = ""   # why no advisory can be matched; reported as unresolved
+    contained_by: str = ""  # the edition that ships this one, when both are locked
 
 
 @dataclass
@@ -214,6 +215,7 @@ def _read_json(path: Path):
 def parse_composer_lock(path: Path, root: Path) -> ParseResult:
     doc = _read_json(path)
     rel, out, skipped = _rel(path, root), [], []
+    editions = _contained_editions(doc)
     for key, scope in (("packages", "runtime"), ("packages-dev", "dev")):
         for p in doc.get(key) or []:
             name, ver = p.get("name"), p.get("version")
@@ -229,10 +231,40 @@ def parse_composer_lock(path: Path, root: Path) -> ParseResult:
             # one package that matters most. They are listed a second time
             # under the Magento ecosystem, whose feed is built from NVD.
             if name in MAGENTO_METAPACKAGES:
-                out.append(Package("Magento", name, clean, scope, rel))
+                out.append(Package("Magento", name, clean, scope, rel,
+                                   contained_by=editions.get((name, clean), "")))
             elif name.startswith(MAGE_OS_EDITION_PREFIX):
                 out.append(_mage_os_edition(p, name, clean, scope, rel))
     return ParseResult(out, skipped)
+
+
+def _contained_editions(doc: dict) -> dict:
+    """{(edition, version): the edition that ships it} for the Magento metapackages.
+
+    Adobe Commerce is Magento Open Source plus the commercial modules, and its
+    metapackage requires the Open Source one at the identical version -- so a
+    Commerce store locks both, and NVD files one advisory against both CPE
+    products for the same reason. Read as two installs, one store reports
+    every Adobe CVE twice.
+
+    The relationship is read from the lockfile's own `require` rather than
+    assumed, so a store that locks only one edition, or locks them at
+    different versions, is left as the two separate things it is.
+    """
+    out = {}
+    for key in ("packages", "packages-dev"):
+        for entry in doc.get(key) or []:
+            name = entry.get("name")
+            if name not in MAGENTO_METAPACKAGES:
+                continue
+            version = str(entry.get("version") or "").lstrip("vV")
+            require = entry.get("require")
+            if not (version and isinstance(require, dict)):
+                continue
+            for dep, spec in require.items():
+                if dep in MAGENTO_METAPACKAGES and spec == version:
+                    out[(dep, version)] = name
+    return out
 
 
 def _replaced(entry: dict) -> tuple:

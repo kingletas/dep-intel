@@ -48,6 +48,25 @@ def summarise(findings) -> dict:
     }
 
 
+def _remediation_line(f) -> str:
+    """Why this finding names no version to upgrade to.
+
+    An advisory with fixes that are all behind the installed version is a
+    different fact from one that publishes no fix at all, and collapsing the
+    two hides which of them the reader is looking at.
+    """
+    if not f.superseded:
+        return "no fixed version published"
+    behind = ", ".join(f.superseded)
+    verb = "is" if len(f.superseded) == 1 else "are"
+    return (f"no fix published above {f.version}"
+            f" (the advisory's {behind} {verb} already behind it)")
+
+
+def _md_none(f) -> str:
+    return "**none above installed**" if f.superseded else "**none published**"
+
+
 def bar(n: int, total: int, width: int = 10) -> str:
     if total <= 0:
         return "░" * width
@@ -85,9 +104,11 @@ def render_text(findings, unresolved, meta, stream=sys.stdout, verbose=False):
         w(f"      {_c('dim', 'confidence: ' + f.confidence + ' — ' + f.evidence, on)}\n")
         if f.mapped_to:
             w(f"      {_c('dim', 'matched as: ' + f.mapped_to.describe(), on)}\n")
+        if f.also_affects:
+            w(f"      {_c('dim', 'also filed against: ' + ', '.join(f.also_affects) + ' (shipped inside this edition)', on)}\n")
         w(f"      {_c('dim', 'manifest:   ' + f.manifest, on)}\n")
         w("      fixed in:   " + (", ".join(f.fixed) if f.fixed
-                                  else _c("dim", "no fixed version published", on))
+                                  else _c("dim", _remediation_line(f), on))
           + "\n")
         if f.kev and f.kev_ransomware.lower() == "known":
             w("      " + _c("kev", "used in known ransomware campaigns", on) + "\n")
@@ -166,6 +187,8 @@ def render_json(findings, unresolved, meta) -> str:
             "known_exploited": f.kev, "kev_added": f.kev_added,
             "kev_ransomware": f.kev_ransomware,
             "fixed_versions": f.fixed,
+            "superseded_fixes": f.superseded,
+            "also_affects": f.also_affects,
             "confidence": f.confidence, "evidence": f.evidence,
             "references": f.refs[:5],
             "matched_as": ({"package": f.mapped_to.name,
@@ -219,7 +242,7 @@ def render_sarif(findings, unresolved, meta) -> str:
             + (f", matched as {f.mapped_to.describe()}" if f.mapped_to else "")
             + (" (CISA known-exploited)" if f.kev else "")
             + (f"; fixed in {', '.join(f.fixed)}" if f.fixed
-               else "; no fixed version published")
+               else "; " + _remediation_line(f))
             + f". Confidence {f.confidence}: {f.evidence}."},
         "locations": [{"physicalLocation": {
             "artifactLocation": {"uri": f.manifest},
@@ -342,7 +365,7 @@ def render_markdown(findings, unresolved, meta) -> str:
             out.append(
                 f"| `{f.package}` | `{f.version}` | {f.vuln_id} | "
                 f"{f.kev_added or '—'} | {ransom} | "
-                f"{', '.join(f'`{v}`' for v in f.fixed) or '**none published**'} |")
+                f"{', '.join(f'`{v}`' for v in f.fixed) or _md_none(f)} |")
         out.append("")
 
     if findings:
@@ -363,7 +386,7 @@ def render_markdown(findings, unresolved, meta) -> str:
             out.append(
                 f"| {SEV_EMOJI[f.severity]} | {kev}`{f.package}` | "
                 f"{version} | {f.vuln_id} | {score} | {f.confidence} | "
-                f"{', '.join(f'`{v}`' for v in f.fixed) or '—'} | {f.scope} |")
+                f"{', '.join(f'`{v}`' for v in f.fixed) or _md_none(f)} | {f.scope} |")
         out.append("")
 
     if unresolved:
