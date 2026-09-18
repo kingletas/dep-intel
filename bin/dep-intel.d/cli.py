@@ -285,6 +285,17 @@ def _scan_one(conn, root: Path, args, meta_extra=None):
     packages, skipped, locks = manifests.collect(root)
     findings, unresolved = match.scan_packages(
         conn, str(root), packages, include_dev=not args.no_dev)
+
+    # A lockfile git does not track is whatever this machine happened to
+    # resolve, not what the project ships. It is reported and it never fails
+    # the scan; `host` is the command for what is installed here.
+    tracked = manifests.tracked_paths(root)
+    untracked_manifests = set()
+    if tracked is not None:
+        for f in findings:
+            if f.manifest and f.manifest not in tracked:
+                f.tracked = False
+                untracked_manifests.add(f.manifest)
     meta = {
         "repo": str(root),
         "packages": len(packages),
@@ -298,6 +309,13 @@ def _scan_one(conn, root: Path, args, meta_extra=None):
             "no TOML parser on this interpreter: uv.lock, poetry.lock and "
             "Cargo.lock were NOT read, so Python and Rust dependencies are "
             "under-reported")
+    if untracked_manifests:
+        names = ", ".join(sorted(untracked_manifests))
+        meta["notes"].append(
+            f"{len(untracked_manifests)} manifest(s) are not tracked by git and do "
+            f"not fail this scan: {names}. What a clone resolves is decided by the "
+            "constraint files that are tracked, so a finding here is about this "
+            "machine rather than about what the project ships")
     _warn_unsynced(conn, packages, meta["notes"])
     # Raised only when there is something for it to be about, so it is a note
     # on a finding rather than a banner on every scan.

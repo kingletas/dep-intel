@@ -8,6 +8,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A lockfile git does not track no longer fails a scan.**
+
+  An untracked lockfile is whatever this machine happened to resolve, not what the project ships: nobody who clones the repository gets it, and no consumer resolves against it. What a clone resolves is decided by the constraint files that are tracked. The finding is still reported, with a note naming the manifests and saying why they did not fail, because it is true about this machine — and `host` is the command for that question.
+
+  Found on a Magento module library whose shared test harness pulls a full Adobe Commerce into a gitignored `dev/composer.lock`. Every one of its 26 findings was that one package, none had a published fix, and the shipping surface was clean. Reported as a blocker on publication it was not, every week, which is the shape of report that stops being read.
+
+  A directory that is not a repository is unchanged: it has nothing to say about what ships, so nothing is downgraded. Tested in all three directions.
+
 - **`docs/from-nothing.md`**, a guide from a clean machine to a first scan, a fix and a sweep, using an example lockfile.
 - **A release workflow.** Pushing a `vX.Y.Z` tag checks that the tag matches `dep-intel --version`, runs `make check`, and publishes a GitHub release whose notes are that version's section of this file.
 - **Mage-OS stores are checked against Magento's advisories.** Mage-OS locks no `magento/*` package, so until now its Magento CVEs were never checked and the store scanned clean. A `mage-os/product-*` edition is now matched as Magento Open Source at the version in its `extra.magento_version`. Each finding names the Magento version it was matched as, and the JSON report carries it as `matched_as`. An edition with no `extra.magento_version` is listed as undecided rather than passing as clean.

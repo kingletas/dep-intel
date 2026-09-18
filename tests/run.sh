@@ -231,6 +231,37 @@ check_out    "ruff is reached through uv when it is not on PATH" "via uvx" \
 check_status "ruff with no uv either is a failure, not a skip" 1 \
              env PATH=/usr/bin:/bin "$here/scripts/lint-tool" ruff check .
 
+# A lockfile git does not track is whatever this machine resolved, not what the
+# project ships. Three directions, because the middle one is the change and the
+# other two are what must not move. Reuses the seeded store above, so the
+# finding is the same known one.
+gitrepo="$tmp/gitrepo"
+mkdir -p "$gitrepo/dev"
+printf '%s\n' '{"packages":[{"name":"acme/lib","version":"1.5.0"}],"packages-dev":[]}' > "$gitrepo/composer.lock"
+cp "$gitrepo/composer.lock" "$gitrepo/dev/composer.lock"
+printf 'dev/composer.lock\n' > "$gitrepo/.gitignore"
+git -C "$gitrepo" init -q
+git -C "$gitrepo" config user.email t@example.invalid
+git -C "$gitrepo" config user.name t
+git -C "$gitrepo" add composer.lock .gitignore
+git -C "$gitrepo" commit -q -m "tracked lock"
+
+check_status "a tracked lockfile with a finding still fails" 1 \
+             env DEP_INTEL_DB="$seeded" "$bin" scan "$gitrepo" --fail-on high
+
+git -C "$gitrepo" rm -q --cached composer.lock
+printf 'composer.lock\n' >> "$gitrepo/.gitignore"
+git -C "$gitrepo" commit -q -am "untrack it"
+
+check_status "the same finding in untracked lockfiles does not fail" 0 \
+             env DEP_INTEL_DB="$seeded" "$bin" scan "$gitrepo" --fail-on high
+check_out    "and the report says why it did not" "not tracked by git and do not fail" \
+             env DEP_INTEL_DB="$seeded" "$bin" scan "$gitrepo" --fail-on high
+
+rm -rf "$gitrepo/.git"
+check_status "a directory that is not a repository is unchanged" 1 \
+             env DEP_INTEL_DB="$seeded" "$bin" scan "$gitrepo" --fail-on high
+
 echo
 if [[ $fail -eq 0 ]]; then
   echo "  all end-to-end checks passed"

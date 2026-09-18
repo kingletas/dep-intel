@@ -67,6 +67,7 @@ class Finding:
     evidence: str
     refs: list = field(default_factory=list)
     superseded: list = field(default_factory=list)  # published fixes already at or below `version`
+    tracked: bool = True  # false when git does not track the manifest it came from
     also_affects: list = field(default_factory=list)  # editions this store ships that carry the same advisory
     mapped_to: object = None    # manifests.MatchedAs when matched under another name
 
@@ -364,6 +365,12 @@ def policy_verdict(findings, fail_on="high", min_confidence="high",
     Both axes are applied, which is the whole point of keeping them separate:
     a critical finding at low confidence warns rather than failing, and any
     KEV entry fails regardless of either axis.
+
+    A finding from a manifest git does not track never fails. An untracked
+    lockfile is whatever happens to be resolved on this machine, not what the
+    project ships: nobody who clones the repository gets it, and no consumer
+    resolves against it. It is still reported, because it is true about this
+    machine, and `host` is the command for that question.
     """
     fail_rank = SEVERITY_ORDER.get(fail_on, 3)
     conf_rank = CONFIDENCE_ORDER.get(min_confidence, 2)
@@ -371,6 +378,10 @@ def policy_verdict(findings, fail_on="high", min_confidence="high",
     for f in findings:
         sev = SEVERITY_ORDER.get(f.severity, 0)
         conf = CONFIDENCE_ORDER.get(f.confidence, 0)
+        if not getattr(f, "tracked", True):
+            if sev >= fail_rank or (fail_on_kev and f.kev):
+                warning.append(f)
+            continue
         if (fail_on_kev and f.kev) or (sev >= fail_rank and conf >= conf_rank):
             failing.append(f)
         elif sev >= fail_rank:

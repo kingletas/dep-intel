@@ -716,6 +716,21 @@ def _declares_dependencies(path: Path) -> bool:
         return True                       # unreadable is a gap, and is reported
 
 
+def tracked_paths(root: Path) -> set:
+    """Repository-relative paths git tracks, or None when this is not a repository.
+
+    None and an empty set are different answers: a directory that is not a
+    repository has nothing to say about what ships, so nothing is downgraded.
+    """
+    import subprocess
+    try:
+        out = subprocess.run(["git", "-c", "core.quotepath=false", "ls-files", "-z"],
+                             cwd=root, capture_output=True, check=True).stdout
+    except (subprocess.CalledProcessError, OSError, FileNotFoundError):
+        return None
+    return {p.decode("utf-8", "replace") for p in out.split(b"\0") if p}
+
+
 def collect(root: Path):
     """Every package in a repository, plus everything that could not be read."""
     root = Path(root).resolve()
